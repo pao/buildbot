@@ -1863,7 +1863,7 @@ class P4Sync(P4Base):
                          sendRC=False, timeout=self.timeout,
                          maxTime=self.maxTime, usePTY=False)
         self.command = c
-        return c.start()c
+        return c.start()
 
     def doVCUpdate(self):
         return self._doVC(force=False)
