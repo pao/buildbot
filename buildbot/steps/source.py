@@ -1271,14 +1271,16 @@ class AndroidRepo(Source):
     def __init__(self, manifestpath, revision, **kwargs):
         Source.__init__(self, **kwargs)
         self.addFactoryArguments(manifestpath=manifestpath, revision=revision)
-        self.args.update({"manifestpath":manifestpath,"revision":revision}}
+        self.args.update({"manifestpath":manifestpath,"revision":revision})
 
     def computeSourceRevision(self, changes):
         if not changes:
             return None
         return changes[-1].revision
 
-    def startVC(self, **kwargs):
-        cmd = LoggedRemoteCommand("repo", self.args)
+    def startVC(self, branch, revision, patch):
+        args = dict(self.args)
+        args['revision'] = 'eclair'
+        cmd = LoggedRemoteCommand("androidrepo", args)
         self.startCommand(cmd)
 

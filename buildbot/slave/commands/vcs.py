@@ -1887,6 +1887,7 @@ class AndroidRepo(SourceBase):
         self.vcexe = getCommand("repo")
         self.manifestpath = args['manifestpath']
         self.revision = args['revision']
+        self.branch = args.get('branch')
         if not self.branch:
             self.branch = "master"
     
@@ -1904,7 +1905,7 @@ class AndroidRepo(SourceBase):
             d.addCallback(cb)
         return d
 
-    def _didInit(self):
+    def _didInit(self, res):
         return self.doVCUpdate()
 
     def doVCFull(self):
@@ -1918,5 +1919,8 @@ class AndroidRepo(SourceBase):
 
     def doVCUpdate(self):
         return self._dovccmd(['sync'], self._didSync)
+    
+    def sourcedirIsUpdateable(self):
+        return os.path.isdir(os.path.join(self._fullSrcdir(), ".git"))
 
 registerSlaveCommand("androidrepo", AndroidRepo, command_version)
