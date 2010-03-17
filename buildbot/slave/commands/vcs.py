@@ -82,11 +82,11 @@ class SourceBase(Command):
 
         d = defer.succeed(None)
         self.maybeClobber(d)
-        if not (self.sourcedirIsUpdateable() and self.sourcedataMatches()):
-            # the directory cannot be updated, so we have to clobber it.
-            # Perhaps the master just changed modes from 'export' to
-            # 'update'.
-            d.addCallback(self.doClobber, self.srcdir)
+#        if not (self.sourcedirIsUpdateable() and self.sourcedataMatches()):
+#            # the directory cannot be updated, so we have to clobber it.
+#            # Perhaps the master just changed modes from 'export' to
+#            # 'update'.
+#            d.addCallback(self.doClobber, self.srcdir)
 
         d.addCallback(self.doVC)
 
@@ -1885,18 +1885,53 @@ class AndroidRepo(SourceBase):
     def setup(self, args):
         SourceBase.setup(self, args)
         self.vcexe = getCommand("repo")
+        self.gitexe = getCommand("git")
         self.manifestpath = args['manifestpath']
-        self.revision = args['revision']
         self.branch = args.get('branch')
         if not self.branch:
             self.branch = "master"
+            
+    def sourcedirIsUpdateable(self):
+        # TODO:
+        # Do some checks to see if we can really do a repo sync.
+        return True
+    
+    def doVCFull(self):
+        try:
+            os.makedirs(self._fullSrcdir())
+        except:
+            pass
+        
+        command = ['init', '-u', self.manifestpath, '-b', self.branch]
+        return self._dovccmd(command, self._didInit)
+    
+    def doVCUpdate(self):
+        return self._dovccmd(['sync'], self._didSync)
+    
+    def parseGotRevision(self):
+        command = [
+                   '--git-dir=./.repo/manifests/.git',
+                   'rev-parse', 
+                   'HEAD'
+                   ]
+        def _parse(res):
+            hash = self.command.stdout.strip()
+            if len(hash) != 40:
+                return None
+            return hash
+        return self._dovccmd(command, _parse, keepStdout=True, git=True)
     
     def _fullSrcdir(self):
         return os.path.join(self.builder.basedir, self.srcdir)
 
-    def _dovccmd(self, command, cb=None, **kwargs):
-        c = ShellCommand(self.builder, [self.vcexe] + command, self._fullSrcdir(),
-                         sendRC=False, timeout=self.timeout,
+    def _dovccmd(self, command, cb=None, git=False, **kwargs):
+        if (git):
+             exe = self.gitexe
+        else:
+            exe = self.vcexe
+            
+        c = ShellCommand(self.builder, [exe] + command, 
+                         self._fullSrcdir(), sendRC=False, timeout=self.timeout,
                          maxTime=self.maxTime, usePTY=False, **kwargs)
         self.command = c
         d = c.start()
@@ -1908,19 +1943,7 @@ class AndroidRepo(SourceBase):
     def _didInit(self, res):
         return self.doVCUpdate()
 
-    def doVCFull(self):
-        os.makedirs(self._fullSrcdir())
-        
-        command = ['init', '-u', self.manifestpath, '-b', self.revision]
-        return self._dovccmd(command, self._didInit)
-
-    def _didSync(self):
+    def _didSync(self, res):
         return defer.succeed(0)
-
-    def doVCUpdate(self):
-        return self._dovccmd(['sync'], self._didSync)
-    
-    def sourcedirIsUpdateable(self):
-        return os.path.isdir(os.path.join(self._fullSrcdir(), ".git"))
 
 registerSlaveCommand("androidrepo", AndroidRepo, command_version)

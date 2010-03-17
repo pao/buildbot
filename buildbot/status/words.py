@@ -82,6 +82,7 @@ class Contact:
                         "You are on the way to destruction."],
         "What you say !!": ["You have no chance to survive make your time.",
                             "HA HA HA HA ...."],
+        "kang": "git fetch upstream && git cherry-pick {cyanogen,ctso} && zip -9 -r update.zip * && signapk update.zip",
         }
 
     def getCommandMethod(self, command):
@@ -565,6 +566,9 @@ class Contact:
     def command_EXCITED(self, args, who):
         # like 'buildbot: destroy the sun!'
         self.send("What you say!")
+        
+    def command_FEMBOT(self, args, who):
+        self.send("Does not fempute") 
 
     def handleAction(self, data, user):
         # this is sent when somebody performs an action that mentions the
@@ -643,6 +647,8 @@ class IRCContact(Contact):
         meth = self.getCommandMethod(cmd)
         if not meth and message[-1] == '!':
             meth = self.command_EXCITED
+        elif not meth:
+            meth = self.command_FEMBOT
 
         error = None
         try:
@@ -877,6 +883,7 @@ class IRC(base.StatusReceiverMultiService):
         self.categories = categories
         self.notify_events = notify_events
         log.msg('Notify events %s' % notify_events)
+        self.in_test_harness = False
         self.f = IrcStatusFactory(self.nick, self.password,
                                   self.channels, self.categories, self.notify_events,
                                   noticeOnChannel = noticeOnChannel,
