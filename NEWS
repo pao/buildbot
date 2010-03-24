@@ -28,6 +28,17 @@ buildmaster, replacing the use of category for this purpose.  Matching can be
 done using regular expressions, so it's even possible to support nested
 projects!
 
+** ShellCommands expand environment variables
+
+If you pass to a shell command an environment variable like this:
+
+ShellCommand(..., env={"FOO": "${BAR}"})
+
+then, on the slave side the variable FOO will have the same value as
+the alread existing BAR variable on the slave. This is mostly used to
+expand variable like this: "PATH": "/my/directory:${PATH}" where PATH
+will have "/my/directory" prepended to it.
+
 ** Scheduler requires keyword arguments
 
 If you are creating your Scheduler like this:
