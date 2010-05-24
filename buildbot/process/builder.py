@@ -377,6 +377,7 @@ class Builder(pb.Referenceable, service.MultiService):
         self.logHorizon = setup.get('logHorizon')
         self.eventHorizon = setup.get('eventHorizon')
         self.mergeRequests = setup.get('mergeRequests', True)
+        self.properties = setup.get('properties', {})
 
         # build/wannabuild slots: Build objects move along this sequence
         self.building = []
@@ -575,8 +576,8 @@ class Builder(pb.Referenceable, service.MultiService):
             return buildable[0].getSubmitTime()
         return None
 
-    def cancelBuildRequest(self, req):
-        pass # TODO: rework
+    def cancelBuildRequest(self, brid):
+        return self.db.cancel_buildrequests([brid])
 
     def consumeTheSoulOfYourPredecessor(self, old):
         """Suck the brain out of an old Builder.
@@ -854,6 +855,11 @@ class Builder(pb.Referenceable, service.MultiService):
         self.building.remove(build)
         self._resubmit_buildreqs(build).addErrback(log.err)
 
+    def setupProperties(self, props):
+        props.setProperty("buildername", self.name, "Builder")
+        if len(self.properties) > 0:
+            for propertyname in self.properties:
+                props.setProperty(propertyname, self.properties[propertyname], "Builder")
 
     def buildFinished(self, build, sb, bids):
         """This is called when the Build has finished (either success or
@@ -960,6 +966,7 @@ class BuildRequestControl:
     def __init__(self, builder, request):
         self.original_builder = builder
         self.original_request = request
+        self.brid = request.id
 
     def subscribe(self, observer):
         raise NotImplementedError
@@ -968,4 +975,4 @@ class BuildRequestControl:
         raise NotImplementedError
 
     def cancel(self):
-        self.original_builder.cancelBuildRequest(self.original_request)
+        self.original_builder.cancelBuildRequest(self.brid)

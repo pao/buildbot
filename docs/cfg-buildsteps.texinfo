@@ -368,8 +368,48 @@ you don't provide this, it defaults to @code{None}, which means VC
 operations should not be retried. This is provided to make life easier
 for buildslaves which are stuck behind poor network connections.
 
+@item repository
+The name of this parameter might varies depending on the Source step you
+are running. The concept explained here is common to all steps and
+applies to @code{repourl} as well as for @code{baseURL} (when
+aplicable). Buildbot, now being aware of the repository name via the
+ChangeSource step might in some cases not need the repository url. There
+are multiple way to pass it through to this step, those correspond to
+the type of the parameter given to this step:
+
+@table @code
+@item None
+In the case where no paraneter is specified, the repository url will be
+taken exactly from the Change property. You are looking for that one if
+your ChangeSource step has all informations about how to reach the
+Change.
+
+@item string
+The parameter might be a string, in this case, this string will be taken
+as the repository url, and nothing more. the value coming from the
+ChangeSource step will be forgotten.
+
+@item format string
+If the parameter is a string containing @code{%s}, then this the
+repository property from the Change will be place in place of the
+@code{%s}. This is usefull when the ChangeSource step knows where the
+repository resides locally, but don't know the scheme used to access
+it. For instance @code{ssh://server/%s} makes sense if the the
+repository property is the local path of the repository.
+
+@item dict
+In this case, the repository URL will be the value indexed by the
+repository property in the dict given as parameter.
+
+@item callable
+The callable given as parameter will take the repository property from
+the Change and its return value will be used as repository URL.
+
+@end table
 @end table
 
+Note that this is quite similar to the mechanism used by the WebStatus
+for the @code{changecommentlink}, @code{projects} or @code{repositories} parameter.
 
 My habit as a developer is to do a @code{cvs update} and @code{make} each
 morning. Problems can occur, either because of bad code being checked in, or
@@ -435,6 +475,14 @@ useful for specifying a branch to work on. Defaults to @code{HEAD}.
 @item global_options
 a list of flags to be put before the verb in the CVS command.
 
+@item checkout_options
+@item export_options
+@item extra_options
+a list of flags to be put after the verb in the CVS command.
+@code{checkout_options} is only used for checkout operations,
+@code{export_options} is only used for export operations, and
+@code{extra_options} is used for both.
+
 @item checkoutDelay
 if set, the number of seconds to put between the timestamp of the last
 known Change and the value used for the @code{-D} option. Defaults to
@@ -455,8 +503,8 @@ The @code{SVN} build step performs a
 There are two basic ways of setting up the checkout step, depending
 upon whether you are using multiple branches or not.
 
-If all of your builds use the same branch, then you should create the
-@code{SVN} step with the @code{svnurl} argument:
+The most versatile way to create the @code{SVN} step is with the
+@code{svnurl} argument:
 
 @table @code
 @item svnurl
@@ -472,9 +520,13 @@ Subversion repository which is accessible through HTTP at a URL of
 to your @code{SVN} step.
 @end table
 
-If, on the other hand, you are building from multiple branches, then
-you should create the @code{SVN} step with the @code{baseURL} and
-@code{defaultBranch} arguments instead:
+The @code{svnurl} argument can be considered as a universal means to
+create the @code{SVN} step as it ignores the branch information in the
+SourceStamp.
+
+Alternatively, if you are building from multiple branches, then you
+should preferentially create the @code{SVN} step with the
+@code{baseURL} and @code{defaultBranch} arguments instead:
 
 @table @code
 @item baseURL
@@ -486,6 +538,10 @@ name will be appended. It should probably end in a slash.
 does not provide one of its own. This will be appended to
 @code{baseURL} to create the string that will be passed to the
 @code{svn checkout} command.
+
+It is possible to mix to have a mix of @code{SVN} steps that use
+either the @code{svnurl} or @code{baseURL} arguments but not both at
+the same time.
 
 @item username
 (optional): if specified, this will be passed to the @code{svn}
@@ -1436,7 +1492,8 @@ This buildstep is similar to ShellCommand, except that it captures the
 output of the command into a property.  It is usually used like this:
 
 @example
-f.addStep(SetProperty(command="uname -a", property="uname"))
+from buildbot.steps import shell
+f.addStep(shell.SetProperty(command="uname -a", property="uname"))
 @end example
 
 This runs @code{uname -a} and captures its stdout, stripped of leading

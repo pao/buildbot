@@ -163,6 +163,32 @@ class Source(LoggingBuildStep):
         self.checkoutDelay value."""
         return None
 
+    def computeRepositoryURL(self, repository):
+        '''
+        Helper function that the repository URL based on the parameter the
+        source step took and the Change 'repository' property
+        '''
+
+        assert not repository or callable(repository) or isinstance(repository, dict) or \
+            isinstance(repository, str) or isinstance(repository, unicode)
+
+        s = self.build.getSourceStamp()
+        if not repository:
+            assert s.repository
+            return str(s.repository)
+        else:
+            if callable(repository):
+                return str(repository(s.repository))
+            elif isinstance(repository, dict):
+                return str(repository.get(s.repository))
+            else: # string or unicode
+                try:
+                    repourl = str(repository % s.repository)
+                except TypeError:
+                    # that's the backward compatibility case
+                    repourl = repository
+                return str(repourl)
+
     def start(self):
         if self.notReally:
             log.msg("faking %s checkout/update" % self.name)
@@ -228,10 +254,10 @@ class BK(Source):
                                  directory=directory,
                                  extra_args=extra_args,
                                  )
-                      
-        if not bkurl and not baseURL:
+
+        if bkurl and baseURL:
             raise ValueError("you must use exactly one of bkurl and baseURL")
-        
+
         
     def computeSourceRevision(self, changes):
         return changes.revision
@@ -247,9 +273,9 @@ class BK(Source):
 
         if self.bkurl:
             assert not branch # we need baseURL= to use branches
-            self.args['bkurl'] = self.bkurl
+            self.args['bkurl'] = self.computeRepositoryURL(self.bkurl)
         else:
-            self.args['bkurl'] = self.baseURL + branch
+            self.args['bkurl'] = self.computeRepositoryURL(self.baseURL) + branch
         self.args['revision'] = revision
         self.args['patch'] = patch
         self.args['branch'] = branch
@@ -291,9 +317,9 @@ class CVS(Source):
     # parsing each line. Might be handy to have a hook in LogFile that gets
     # called with each complete line.
 
-    def __init__(self, cvsroot, cvsmodule,
+    def __init__(self, cvsroot=None, cvsmodule="",
                  global_options=[], branch=None, checkoutDelay=None,
-                 checkout_options=[],
+                 checkout_options=[], export_options=[], extra_options=[],
                  login=None,
                  **kwargs):
 
@@ -352,25 +378,39 @@ class CVS(Source):
         @param checkout_options: these arguments are inserted in the cvs
                                command line, after 'checkout' but before
                                branch or revision specifiers.
+
+        @type  export_options: list of strings
+        @param export_options: these arguments are inserted in the cvs
+                               command line, after 'export' but before
+                               branch or revision specifiers.
+
+        @type  extra_options: list of strings
+        @param extra_options: these arguments are inserted in the cvs
+                               command line, after 'checkout' or 'export' but before
+                               branch or revision specifiers.
                                """
 
         self.checkoutDelay = checkoutDelay
         self.branch = branch
+        self.cvsroot = cvsroot
 
         Source.__init__(self, **kwargs)
         self.addFactoryArguments(cvsroot=cvsroot,
                                  cvsmodule=cvsmodule,
                                  global_options=global_options,
                                  checkout_options=checkout_options,
+                                 export_options=export_options,
+                                 extra_options=extra_options,
                                  branch=branch,
                                  checkoutDelay=checkoutDelay,
                                  login=login,
                                  )
 
-        self.args.update({'cvsroot': cvsroot,
-                          'cvsmodule': cvsmodule,
+        self.args.update({'cvsmodule': cvsmodule,
                           'global_options': global_options,
                           'checkout_options':checkout_options,
+                          'export_options':export_options,
+                          'extra_options':extra_options,
                           'login': login,
                           })
 
@@ -403,8 +443,21 @@ class CVS(Source):
                 log.msg(m)
                 raise BuildSlaveTooOldError(m)
 
+        if self.slaveVersionIsOlderThan("cvs", "2.10"):
+            if self.args['extra_options'] or self.args['export_options']:
+                m = ("This buildslave (%s) does not support export_options "
+                     "or extra_options arguments to the CVS step."
+                     % (self.build.slavename))
+                log.msg(m)
+                raise BuildSlaveTooOldError(m)
+            # the unwanted args are empty, and will probably be ignored by
+            # the slave, but delete them just to be safe
+            del self.args['export_options']
+            del self.args['extra_options']
+
         if branch is None:
             branch = "HEAD"
+        self.args['cvsroot'] = self.computeRepositoryURL(self.cvsroot)
         self.args['branch'] = branch
         self.args['revision'] = revision
         self.args['patch'] = patch
@@ -448,9 +501,7 @@ class SVN(Source):
                        combining the access method (HTTP, ssh, local file),
                        the repository host/port, the repository path, the
                        sub-tree within the repository, and the branch to
-                       check out. Using C{svnurl} does not enable builds of
-                       alternate branches: use C{baseURL} to enable this.
-                       Use exactly one of C{svnurl} and C{baseURL}.
+                       check out. Use exactly one of C{svnurl} and C{baseURL}.
 
         @param baseURL: if branches are enabled, this is the base URL to
                         which a branch name will be appended. It should
@@ -463,11 +514,14 @@ class SVN(Source):
                               to C{baseURL} and the result handed to
                               the SVN command.
 
+        @type  username: string
         @param username: username to pass to svn's --username
-        @param password: username to pass to svn's --password
+
+        @type  password: string
+        @param password: password to pass to svn's --password
         """
 
-        if not kwargs.has_key('workdir') and directory is not None:
+        if not 'workdir' in kwargs and directory is not None:
             # deal with old configs
             warn("Please use workdir=, not directory=", DeprecationWarning)
             kwargs['workdir'] = directory
@@ -494,12 +548,11 @@ class SVN(Source):
                                  keep_on_purge=keep_on_purge,
                                  ignore_ignores=ignore_ignores,
                                  always_purge=always_purge,
-				 depth=depth,
+                                 depth=depth,
                                  )
 
-        if not svnurl and not baseURL:
-            raise ValueError("you must use exactly one of svnurl and baseURL")
-
+        if svnurl and baseURL:
+            raise ValueError("you must use either svnurl OR baseURL")
 
     def computeSourceRevision(self, changes):
         if not changes or None in [c.revision for c in changes]:
@@ -559,10 +612,10 @@ class SVN(Source):
                 raise BuildSlaveTooOldError("old slave can't do patch")
 
         if self.svnurl:
-            assert not branch # we need baseURL= to use branches
-            self.args['svnurl'] = self.svnurl
+            self.args['svnurl'] = self.computeRepositoryURL(self.svnurl)
         else:
-            self.args['svnurl'] = self.baseURL + branch
+            self.args['svnurl'] = (self.computeRepositoryURL(self.baseURL) +
+                                   branch)
         self.args['revision'] = revision
         self.args['patch'] = patch
 
@@ -572,9 +625,8 @@ class SVN(Source):
         if self.depth is not None:
             if self.slaveVersionIsOlderThan("svn","2.9"):
                 m = ("This buildslave (%s) does not support svn depth "
-			     "arguments.  "
-			     "Refusing to build. "
-			     "Please upgrade the buildslave." % (self.build.slavename))
+                     "arguments.  Refusing to build. "
+                     "Please upgrade the buildslave." % (self.build.slavename))
                 raise BuildSlaveTooOldError(m)
             else: 
                 self.args['depth'] = self.depth
@@ -586,14 +638,17 @@ class SVN(Source):
                      "Refusing to build. Please upgrade the buildslave to "
                      "buildbot-0.7.10 or newer." % (self.build.slavename,))
                 raise BuildSlaveTooOldError(m)
-            if self.username is not None: self.args['username'] = self.username
-            if self.password is not None: self.args['password'] = self.password
+            if self.username is not None:
+                self.args['username'] = self.username
+            if self.password is not None:
+                self.args['password'] = self.password
 
         if self.extra_args is not None:
             self.args['extra_args'] = self.extra_args
 
         revstuff = []
-        if branch is not None and branch != self.branch:
+        #revstuff.append(self.args['svnurl'])
+        if self.args['svnurl'].find('trunk') == -1:
             revstuff.append("[branch]")
         if revision is not None:
             revstuff.append("r%s" % revision)
@@ -649,7 +704,7 @@ class Darcs(Source):
                                  )
         assert self.args['mode'] != "export", \
                "Darcs does not have an 'export' mode"
-        if (not repourl and not baseURL) or (repourl and baseURL):
+        if repourl and baseURL:
             raise ValueError("you must provide exactly one of repourl and"
                              " baseURL")
 
@@ -682,9 +737,9 @@ class Darcs(Source):
 
         if self.repourl:
             assert not branch # we need baseURL= to use branches
-            self.args['repourl'] = self.repourl
+            self.args['repourl'] = self.computeRepositoryURL(self.repourl)
         else:
-            self.args['repourl'] = self.baseURL + branch
+            self.args['repourl'] = self.computeRepositoryURL(self.baseURL) + branch
         self.args['revision'] = revision
         self.args['patch'] = patch
 
@@ -703,7 +758,7 @@ class Git(Source):
 
     name = "git"
 
-    def __init__(self, repourl,
+    def __init__(self, repourl=None,
                  branch="master",
                  submodules=False,
                  ignore_ignores=None,
@@ -726,14 +781,14 @@ class Git(Source):
         @param shallow: Use a shallow or clone, if possible
         """
         Source.__init__(self, **kwargs)
+        self.repourl = repourl
         self.addFactoryArguments(repourl=repourl,
                                  branch=branch,
                                  submodules=submodules,
                                  ignore_ignores=ignore_ignores,
                                  shallow=shallow,
                                  )
-        self.args.update({'repourl': repourl,
-                          'branch': branch,
+        self.args.update({'branch': branch,
                           'submodules': submodules,
                           'ignore_ignores': ignore_ignores,
                           'shallow': shallow,
@@ -748,6 +803,7 @@ class Git(Source):
         if branch is not None:
             self.args['branch'] = branch
 
+        self.args['repourl'] = self.computeRepositoryURL(self.repourl)                  
         self.args['revision'] = revision
         self.args['patch'] = patch
         slavever = self.slaveVersion("git")
@@ -769,7 +825,7 @@ class Arch(Source):
     name = "arch"
     # TODO: slaves >0.6.6 will accept args['build-config'], so use it
 
-    def __init__(self, url, version, archive=None, **kwargs):
+    def __init__(self, url=None, version=None, archive=None, **kwargs):
         """
         @type  url: string
         @param url: the Arch coordinates of the repository. This is
@@ -787,14 +843,14 @@ class Arch(Source):
                         repository's default will be used.
         """
         self.branch = version
+        self.url = url
         Source.__init__(self, **kwargs)
         self.addFactoryArguments(url=url,
                                  version=version,
                                  archive=archive,
                                  )
-        self.args.update({'url': url,
-                          'archive': archive,
-                          })
+        assert version, "version should be provided"
+        self.args.update({'archive': archive})
 
     def computeSourceRevision(self, changes):
         # in Arch, fully-qualified revision numbers look like:
@@ -858,6 +914,7 @@ class Arch(Source):
         return warnings
 
     def startVC(self, branch, revision, patch):
+        self.args['url'] = self.computeRepositoryURL(self.url),
         self.args['version'] = branch
         self.args['revision'] = revision
         self.args['patch'] = patch
@@ -898,16 +955,17 @@ class Bazaar(Arch):
                         archive.
         """
         self.branch = version
+        self.url = url
         Source.__init__(self, **kwargs)
         self.addFactoryArguments(url=url,
                                  version=version,
                                  archive=archive,
                                  )
-        self.args.update({'url': url,
-                          'archive': archive,
+        self.args.update({'archive': archive,
                           })
 
     def startVC(self, branch, revision, patch):
+        self.args['url'] = self.computeRepositoryURL(url),
         self.args['version'] = branch
         self.args['revision'] = revision
         self.args['patch'] = patch
@@ -972,7 +1030,7 @@ class Bzr(Source):
                                  forceSharedRepo=forceSharedRepo
                                  )
         self.args.update({'forceSharedRepo': forceSharedRepo})
-        if (not repourl and not baseURL) or (repourl and baseURL):
+        if repourl and baseURL:
             raise ValueError("you must provide exactly one of repourl and"
                              " baseURL")
 
@@ -990,9 +1048,9 @@ class Bzr(Source):
 
         if self.repourl:
             assert not branch # we need baseURL= to use branches
-            self.args['repourl'] = self.repourl
+            self.args['repourl'] = self.computeRepositoryURL(self.repourl)
         else:
-            self.args['repourl'] = self.baseURL + branch
+            self.args['repourl'] = self.computeRepositoryURL(self.baseURL) + branch
         self.args['revision'] = revision
         self.args['patch'] = patch
 
@@ -1060,7 +1118,7 @@ class Mercurial(Source):
                                  branchType=branchType,
                                  clobberOnBranchChange=clobberOnBranchChange,
                                  )
-        if (not repourl and not baseURL) or (repourl and baseURL):
+        if repourl and baseURL:
             raise ValueError("you must provide exactly one of repourl and"
                              " baseURL")
 
@@ -1073,11 +1131,11 @@ class Mercurial(Source):
         if self.repourl:
             # we need baseURL= to use dirname branches
             assert self.branchType == 'inrepo' or not branch
-            self.args['repourl'] = self.repourl
+            self.args['repourl'] = self.computeRepositoryURL(self.repourl)
             if branch:
                 self.args['branch'] = branch
         else:
-            self.args['repourl'] = self.baseURL + (branch or '')
+            self.args['repourl'] = self.computeRepositoryURL(self.baseURL) + (branch or '')
         self.args['revision'] = revision
         self.args['patch'] = patch
         self.args['clobberOnBranchChange'] = self.clobberOnBranchChange
@@ -1110,7 +1168,7 @@ class P4(Source):
     """ P4 is a class for accessing perforce revision control"""
     name = "p4"
 
-    def __init__(self, p4base, defaultBranch=None, p4port=None, p4user=None,
+    def __init__(self, p4base=None, defaultBranch=None, p4port=None, p4user=None,
                  p4passwd=None, p4extra_views=[],
                  p4client='buildbot_%(slave)s_%(builder)s', **kwargs):
         """
@@ -1143,6 +1201,7 @@ class P4(Source):
         @param p4client: The perforce client to use for this buildslave.
         """
 
+        self.p4base = p4base
         self.branch = defaultBranch
         Source.__init__(self, **kwargs)
         self.addFactoryArguments(p4base=p4base,
@@ -1156,12 +1215,12 @@ class P4(Source):
         self.args['p4port'] = p4port
         self.args['p4user'] = p4user
         self.args['p4passwd'] = p4passwd
-        self.args['p4base'] = p4base
         self.args['p4extra_views'] = p4extra_views
         self.p4client = p4client
 
     def setBuild(self, build):
         Source.setBuild(self, build)
+        self.args['p4base'] = self.computeRepositoryURL(self.p4base)
         self.args['p4client'] = self.p4client % {
             'slave': build.slavename,
             'builder': build.builder.name,
@@ -1240,7 +1299,7 @@ class Monotone(Source):
 
     name = "monotone"
 
-    def __init__(self, server_addr, branch, db_path="monotone.db",
+    def __init__(self, server_addr=None, branch=None, db_path="monotone.db",
                  monotone="monotone",
                  **kwargs):
         Source.__init__(self, **kwargs)
@@ -1249,8 +1308,8 @@ class Monotone(Source):
                                  db_path=db_path,
                                  monotone=monotone,
                                  )
-        self.args.update({"server_addr": server_addr,
-                          "branch": branch,
+        assert branch, "branch must be specified"
+        self.args.update({"branch": branch,
                           "db_path": db_path,
                           "monotone": monotone})
 
@@ -1260,6 +1319,7 @@ class Monotone(Source):
         return changes[-1].revision
 
     def startVC(self):
+        self.args["server_addr"] = self.computeRepositoryURL(server_addr),
         slavever = self.slaveVersion("monotone")
         assert slavever, "slave is too old, does not know about monotone"
         cmd = LoggedRemoteCommand("monotone", self.args)

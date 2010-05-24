@@ -32,7 +32,7 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
     patch = None
     changes = ()
     project = ''
-    revision = ''
+    repository = ''
     ssid = None # filled in by db.get_sourcestampid()
 
     compare_attrs = ('branch', 'revision', 'patch', 'changes', 'project', 'repository')
@@ -41,20 +41,15 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
 
     def __init__(self, branch=None, revision=None, patch=None,
                  changes=None, project='', repository=''):
-        if branch is not None:
-            assert isinstance(branch, str), type(branch)
         if revision is not None:
             if isinstance(revision, int):
                 revision = str(revision)
-            assert isinstance(revision, str), type(revision)
         if patch is not None:
             patch_level = patch[0]
-            assert isinstance(patch_level, int), type(patch_level)
+            patch_level = int(patch_level)
             patch_diff = patch[1]
-            assert isinstance(patch_diff, str), type(patch_diff)
             if len(patch) > 2:
                 patch_subdir = patch[2]
-                assert isinstance(patch_subdir, str)
         self.branch = branch
         self.revision = revision
         self.patch = patch
@@ -64,11 +59,7 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
             self.changes = tuple(changes)
             # set branch and revision to most recent change
             self.branch = changes[-1].branch
-            if self.branch is not None:
-                assert isinstance(self.branch, str), type(self.branch)
             self.revision = str(changes[-1].revision)
-            if self.revision is not None:
-                assert isinstance(self.revision, str), type(self.revision)
             if not self.project:
                 self.project = changes[-1].project
             if not self.repository:
@@ -117,6 +108,8 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
         newsource = SourceStamp(branch=self.branch,
                                 revision=self.revision,
                                 patch=self.patch,
+                                project=self.project,
+                                repository=self.repository,
                                 changes=changes)
         return newsource
 
@@ -141,18 +134,6 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
             text.append("[patch]")
         return text
 
-    def getHTMLDict(self):
-        if self.revision is None:
-            return dict(rev='latest')
-        d = dict(rev=self.revision)
-        if self.branch:
-            d['branch'] = self.branch            
-        if self.patch:
-            d['patch'] = True
-        d['repository'] = self.repository
-        d['project'] = self.project
-        return d
-
     def asDict(self):
         result = {}
         # Constant
@@ -171,8 +152,8 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
             self.branch = str(self.branch)
         if self.revision is not None and not isinstance(self.revision, str):
             self.revision = str(self.revision)
-        if self.patch is not None and not isinstance(self.patch, str):
-            self.patch = str(self.patch)
+        if self.patch is not None:
+            self.patch = ( int(self.patch[0]), str(self.patch[1]) )
 
     def upgradeToVersion2(self):
         # version 1 did not have project or repository; just set them to a default ''

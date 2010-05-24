@@ -8,7 +8,7 @@ from zope.interface import implements
 from twisted.trial import unittest
 
 from buildbot.db.schema import manager
-from buildbot.test.fake import fakedb
+from buildbot.db import dbspec
 
 class Thing(object):
     # simple object-with-attributes for use in faking pickled objects
@@ -23,9 +23,7 @@ class DBSchemaManager(unittest.TestCase):
             shutil.rmtree(self.basedir)
         os.makedirs(self.basedir)
 
-        # use an in-memory DB for speed
-        self.conn = fakedb.get_sqlite_memory_connection()
-        self.spec = fakedb.FakeDBSpec(conn=self.conn)
+        self.spec = dbspec.DBSpec.from_url("sqlite:///state.sqlite", self.basedir)
 
         self.sm = manager.DBSchemaManager(self.spec, self.basedir)
 
@@ -36,20 +34,12 @@ class DBSchemaManager(unittest.TestCase):
         assert that the database is an upgrade of an empty db
         """
         errs = []
-        c = self.conn.cursor()
+        c = self.spec.get_sync_connection().cursor()
 
         # check the version
         c.execute("SELECT * FROM version")
         if c.fetchall()[0][0] != self.sm.get_current_version():
             errs.append("VERSION is not up to date")
-
-        # check the next changeid
-        c.execute("SELECT * FROM changes_nextid")
-        res = c.fetchall()
-        if not res:
-            errs.append("next changeid is not set")
-        elif res[0][0] != 1:
-            errs.append("next changeid is incorrect")
 
         # check that the remaining tables are empty
         for empty_tbl in ('changes', 'change_links', 'change_files',
@@ -108,26 +98,18 @@ class DBSchemaManager(unittest.TestCase):
         assert that the database is an upgrade of the db created by fill_basedir
         """
         errs = []
-        c = self.conn.cursor()
+        c = self.spec.get_sync_connection().cursor()
 
         # check the version
         c.execute("SELECT * FROM version")
         if c.fetchall()[0][0] != self.sm.get_current_version():
             errs.append("VERSION is not up to date")
 
-        # check the next changeid
-        c.execute("SELECT * FROM changes_nextid")
-        res = c.fetchall()
-        if not res:
-            errs.append("next changeid is not set")
-        elif res[0][0] != 5: # four renumbered changes => 5 is next
-            errs.append("next changeid is incorrect")
-
         # do a byte-for-byte comparison of the changes table and friends
         c.execute("""SELECT changeid, author, comments, is_dir, branch, revision,
                     revlink, when_timestamp, category, repository, project
                     FROM changes order by revision""")
-        res = c.fetchall()
+        res = list(c.fetchall())
         if res != [
             (1, u'dustin', 'hi, mom', 1, u'', u'1233',
                 u'http://buildbot.net', 1267419122, u'', u'', u''),
@@ -143,7 +125,7 @@ class DBSchemaManager(unittest.TestCase):
             errs.append("changes table does not match expectations")
 
         c.execute("""SELECT changeid, link from change_links order by changeid""")
-        res = c.fetchall()
+        res = list(c.fetchall())
         if res != [
                 (4, u'http://github.com'),
             ]:
@@ -151,7 +133,7 @@ class DBSchemaManager(unittest.TestCase):
             errs.append("change_links table does not match expectations")
 
         c.execute("""SELECT changeid, filename from change_files order by changeid""")
-        res = c.fetchall()
+        res = list(c.fetchall())
         if res != [
                 (4, u'main.c'),
                 (4, u'util.c'),
@@ -162,7 +144,7 @@ class DBSchemaManager(unittest.TestCase):
 
         c.execute("""SELECT changeid, property_name, property_value
                     from change_properties order by changeid, property_name""")
-        res = c.fetchall()
+        res = list(c.fetchall())
         if res != [
                 (3, u'name', u'"jimmy"'),
                 (4, u'failures', u'3'),
@@ -189,15 +171,17 @@ class DBSchemaManager(unittest.TestCase):
     def test_get_current_version(self):
         # this is as much a reminder to write tests for the new version
         # as a test of the (very trivial) method
-        self.assertEqual(self.sm.get_current_version(), 2)
+        self.assertEqual(self.sm.get_current_version(), 5)
 
     def test_get_db_version_empty(self):
         self.assertEqual(self.sm.get_db_version(), 0)
 
     def test_get_db_version_int(self):
-        self.conn.execute("CREATE TABLE version (`version` integer)")
-        self.conn.execute("INSERT INTO version values (17)")
-        self.assertEqual(self.sm.get_db_version(), 17)
+        conn = self.spec.get_sync_connection()
+        c = conn.cursor()
+        c.execute("CREATE TABLE version (`version` integer)")
+        c.execute("INSERT INTO version values (17)")
+        self.assertEqual(self.sm.get_db_version(conn), 17)
 
     def test_is_current_empty(self):
         self.assertFalse(self.sm.is_current())
@@ -214,3 +198,38 @@ class DBSchemaManager(unittest.TestCase):
         self.fill_basedir()
         self.sm.upgrade(quiet=True)
         self.assertDatabaseOKFull()
+
+    def test_scheduler_name_uniqueness(self):
+        self.sm.upgrade(quiet=True)
+        c = self.spec.get_sync_connection().cursor()
+        c.execute("""INSERT INTO schedulers (`name`, `class_name`, `state`)
+                                             VALUES ('s1', 'Nightly', '')""")
+        c.execute("""INSERT INTO schedulers (`name`, `class_name`, `state`)
+                                             VALUES ('s1', 'Periodic', '')""")
+        self.assertRaises(Exception, c.execute,
+                """INSERT INTO schedulers (`name`, `class_name`, `state`)
+                                   VALUES ('s1', 'Nightly', '')""")
+
+class MySQLDBSchemaManager(DBSchemaManager):
+    def setUp(self):
+        self.basedir = "MySQLDBSchemaManager"
+        if os.path.exists(self.basedir):
+            shutil.rmtree(self.basedir)
+        os.makedirs(self.basedir)
+
+        self.spec = dbspec.DBSpec.from_url("mysql://buildbot_test:buildbot_test@localhost/buildbot_test")
+
+        # Drop all previous tables
+        cur = self.spec.get_sync_connection().cursor()
+        cur.execute("SHOW TABLES")
+        for row in cur.fetchall():
+            cur.execute("DROP TABLE %s" % row[0])
+        cur.execute("COMMIT")
+
+        self.sm = manager.DBSchemaManager(self.spec, self.basedir)
+
+try:
+    import MySQLdb
+    conn = MySQLdb.connect(user="buildbot_test", db="buildbot_test", passwd="buildbot_test", use_unicode=True, charset='utf8')
+except:
+    MySQLDBSchemaManager.skip = True

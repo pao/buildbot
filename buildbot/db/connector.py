@@ -37,10 +37,10 @@
 #
 # ***** END LICENSE BLOCK *****
 
-import sys, time, collections, base64, os, re
+import sys, collections, base64
 
-from twisted.python import log, reflect, threadable
-from twisted.internet import defer, reactor
+from twisted.python import log, threadable
+from twisted.internet import defer
 from twisted.enterprise import adbapi
 from buildbot import util
 from buildbot.util import collections as bbcollections
@@ -93,6 +93,8 @@ class DBConnector(util.ComparableMixin):
         # this is for synchronous calls: runQueryNow, runInteractionNow
         self._dbapi = spec.get_dbapi()
         self._nonpool = None
+        self._nonpool_lastused = None
+        self._nonpool_max_idle = spec.get_maxidle()
 
         # pass queries in with "?" placeholders. If the backend uses a
         # different style, we'll replace them.
@@ -117,7 +119,7 @@ class DBConnector(util.ComparableMixin):
 
     def _getCurrentTime(self):
         # this is a seam for use in testing
-        return time.time()
+        return util.now()
 
     def start(self):
         # this only *needs* to be called in reactorless environments (which
@@ -127,6 +129,13 @@ class DBConnector(util.ComparableMixin):
 
     def stop(self):
         """Call this when you're done with me"""
+
+        # Close our synchronous connection if we've got one
+        if self._nonpool:
+            self._nonpool.close()
+            self._nonpool = None
+            self._nonpool_lastused = None
+
         if not self._started:
             return
         self._pool.close()
@@ -205,23 +214,38 @@ class DBConnector(util.ComparableMixin):
             self._end_operation(t)
             self._add_query_time(start)
 
-    def _runInteractionNow(self, interaction, *args, **kwargs):
+    def get_sync_connection(self):
+        # This is a wrapper around spec.get_sync_connection that maintains a
+        # single connection to the database for synchronous usage.  It will get
+        # a new connection if the existing one has been idle for more than
+        # max_idle seconds.
+        if self._nonpool_max_idle is not None:
+            now = util.now()
+            if self._nonpool_lastused and self._nonpool_lastused + self._nonpool_max_idle < now:
+                self._nonpool = None
+
         if not self._nonpool:
             self._nonpool = self._spec.get_sync_connection()
-        c = self._nonpool.cursor()
+
+        self._nonpool_lastused = util.now()
+        return self._nonpool
+
+    def _runInteractionNow(self, interaction, *args, **kwargs):
+        conn = self.get_sync_connection()
+        c = conn.cursor()
         try:
             result = interaction(c, *args, **kwargs)
             c.close()
-            self._nonpool.commit()
+            conn.commit()
             return result
         except:
             excType, excValue, excTraceback = sys.exc_info()
             try:
-                self._nonpool.rollback()
-                c2 = self._nonpool.cursor()
+                conn.rollback()
+                c2 = conn.cursor()
                 c2.execute(self._pool.good_sql)
                 c2.close()
-                self._nonpool.commit()
+                conn.commit()
             except:
                 log.msg("rollback failed, will reconnect next query")
                 log.err()
@@ -248,7 +272,7 @@ class DBConnector(util.ComparableMixin):
         assert self._started
         self._pending_operation_count += 1
         start = self._getCurrentTime()
-        #t = self._start_operation()
+        #t = self._start_operation()   # why is this commented out? -warner
         d = self._pool.runQuery(*args, **kwargs)
         #d.addBoth(self._runQuery_done, start, t)
         return d
@@ -285,33 +309,22 @@ class DBConnector(util.ComparableMixin):
         self._change_cache.add(change.number, change)
 
     def _txn_addChangeToDatabase(self, t, change):
-        t.execute("SELECT next_changeid FROM changes_nextid")
-        r = t.fetchall()
-        new_next_changeid = old_next_changeid = r[0][0]
-        if change.number is None:
-            change.number = old_next_changeid
-            new_next_changeid = old_next_changeid + 1
-        else:
-            new_next_changeid = max(old_next_changeid, change.number+1)
-        if new_next_changeid > old_next_changeid:
-            q = "UPDATE changes_nextid SET next_changeid = ? WHERE 1"
-            t.execute(self.quoteq(q), (new_next_changeid,))
-
         q = self.quoteq("INSERT INTO changes"
-                        " (changeid, author,"
+                        " (author,"
                         "  comments, is_dir,"
                         "  branch, revision, revlink,"
                         "  when_timestamp, category,"
                         "  repository, project)"
-                        " VALUES (?,?, ?,?, ?,?,?, ?,?, ?,?)")
+                        " VALUES (?, ?,?, ?,?,?, ?,?, ?,?)")
         # TODO: map None to.. empty string?
 
-        values = (change.number, change.who,
+        values = (change.who,
                   change.comments, change.isdir,
                   change.branch, change.revision, change.revlink,
                   change.when, change.category, change.repository,
                   change.project)
         t.execute(q, values)
+        change.number = t.lastrowid
 
         for link in change.links:
             t.execute(self.quoteq("INSERT INTO change_links (changeid, link) "
@@ -340,7 +353,7 @@ class DBConnector(util.ComparableMixin):
                 args.extend(list(branches))
             if categories:
                 pieces.append("category IN %s" % self.parmlist(len(categories)))
-                args.extend(list(branches))
+                args.extend(list(categories))
             if committers:
                 pieces.append("author IN %s" % self.parmlist(len(committers)))
                 args.extend(list(committers))
@@ -349,12 +362,21 @@ class DBConnector(util.ComparableMixin):
             q += " AND ".join(pieces)
         q += " ORDER BY changeid DESC"
         rows = self.runQueryNow(q, tuple(args))
-        # will this work? do I need to finish fetching everything by using
-        # list(rows)? or can I use it as an iterator and fetch things as
-        # needed? will the queries in getChangeNumberedNow() interfere with
-        # that iterator?
         for (changeid,) in rows:
             yield self.getChangeNumberedNow(changeid)
+
+    def getLatestChangeNumberNow(self, t=None):
+        if t:
+            return self._txn_getLatestChangeNumber(t)
+        else:
+            return self.runInteractionNow(self._txn_getLatestChangeNumber)
+    def _txn_getLatestChangeNumber(self, t):
+        q = self.quoteq("SELECT max(changeid) from changes")
+        t.execute(q)
+        row = t.fetchone()
+        if not row:
+            return 0
+        return row[0]
 
     def getChangeNumberedNow(self, changeid, t=None):
         # this is a synchronous/blocking version of getChangeByNumber
@@ -397,12 +419,11 @@ class DBConnector(util.ComparableMixin):
 
         p = self.get_properties_from_db("change_properties", "changeid",
                                         changeid, t)
-        properties = p.properties
-
         c = Change(who=who, files=files, comments=comments, isdir=isdir,
                    links=links, revision=revision, when=when,
                    branch=branch, category=category, revlink=revlink,
-                   properties=properties, repository=repository, project=project)
+                   repository=repository, project=project)
+        c.properties.updateFromProperties(p)
         c.number = changeid
         return c
 
@@ -425,16 +446,14 @@ class DBConnector(util.ComparableMixin):
         d3 = self.runQuery(self.quoteq("SELECT filename FROM change_files"
                                        " WHERE changeid=?"),
                            (changeid,))
-        d4 = self.runQuery(self.quoteq("SELECT property_name,property_value"
-                                       " FROM change_properties"
-                                       " WHERE changeid=?"),
-                           (changeid,))
+        d4 = self.runInteraction(self._txn_get_properties_from_db,
+                "change_properties", "changeid", changeid)
         d = defer.gatherResults([d1,d2,d3,d4])
         d.addCallback(self._getChangeByNumber_query_done, changeid)
         return d
 
     def _getChangeByNumber_query_done(self, res, changeid):
-        (rows, link_rows, file_rows, prop_rows) = res
+        (rows, link_rows, file_rows, properties) = res
         if not rows:
             return None
         (who, comments,
@@ -446,12 +465,12 @@ class DBConnector(util.ComparableMixin):
         links.sort()
         files = [row[0] for row in file_rows]
         files.sort()
-        properties = dict(prop_rows)
 
         c = Change(who=who, files=files, comments=comments, isdir=isdir,
                    links=links, revision=revision, when=when,
                    branch=branch, category=category, revlink=revlink,
-                   properties=properties, repository=repository, project=project)
+                   repository=repository, project=project)
+        c.properties.updateFromProperties(properties)
         c.number = changeid
         self._change_cache.add(changeid, c)
         return c
@@ -562,19 +581,35 @@ class DBConnector(util.ComparableMixin):
         for scheduler in added:
             name = scheduler.name
             assert name
-            q = self.quoteq("SELECT schedulerid FROM schedulers WHERE name=?")
-            t.execute(q, (name,))
-            sid = _one_or_else(t.fetchall())
+            class_name = "%s.%s" % (scheduler.__class__.__module__,
+                    scheduler.__class__.__name__)
+            q = self.quoteq("""
+                SELECT schedulerid, class_name FROM schedulers WHERE
+                    name=? AND
+                    (class_name=? OR class_name='')
+                    """)
+            t.execute(q, (name, class_name))
+            row = t.fetchone()
+            if row:
+                sid, db_class_name = row
+                if db_class_name == '':
+                    # We're updating from an old schema where the class name
+                    # wasn't stored.
+                    # Update this row's class name and move on
+                    q = self.quoteq("""UPDATE schedulers SET class_name=?
+                        WHERE schedulerid=?""")
+                    t.execute(q, (class_name, sid))
+                elif db_class_name != class_name:
+                    # A different scheduler is being used with this name.
+                    # Ignore the old scheduler and create a new one
+                    sid = None
+            else:
+                sid = None
+
             if sid is None:
-                # create a new row, with the next-highest schedulerid and the
-                # latest changeid (so it won't try to process all of the old
-                # changes)
-                q = ("SELECT schedulerid FROM schedulers"
-                     " ORDER BY schedulerid DESC LIMIT 1")
-                t.execute(q)
-                max_sid = _one_or_else(t.fetchall(), 0)
-                sid = max_sid + 1
-                # new Schedulers are supposed to ignore pre-existing Changes
+                # create a new row, with the latest changeid (so it won't try
+                # to process all of the old changes) new Schedulers are
+                # supposed to ignore pre-existing Changes
                 q = ("SELECT changeid FROM changes"
                      " ORDER BY changeid DESC LIMIT 1")
                 t.execute(q)
@@ -582,9 +617,10 @@ class DBConnector(util.ComparableMixin):
                 state = scheduler.get_initial_state(max_changeid)
                 state_json = json.dumps(state)
                 q = self.quoteq("INSERT INTO schedulers"
-                                " (schedulerid, name, state)"
+                                " (name, class_name, state)"
                                 "  VALUES (?,?,?)")
-                t.execute(q, (sid, name, state_json))
+                t.execute(q, (name, class_name, state_json))
+                sid = t.lastrowid
             log.msg("scheduler '%s' got id %d" % (scheduler.name, sid))
             scheduler.schedulerid = sid
 
@@ -614,18 +650,16 @@ class DBConnector(util.ComparableMixin):
             subdir = None
             if len(ss.patch) > 2:
                 subdir = ss.patch[2]
-            t.execute("SELECT id FROM patches ORDER BY id DESC LIMIT 1")
-            patchid = _one_or_else(t.fetchall(), 0) + 1
             q = self.quoteq("INSERT INTO patches"
-                            " (id, patchlevel, patch_base64, subdir)"
-                            " VALUES (?,?,?,?)")
-            t.execute(q, (patchid, patchlevel, base64.b64encode(diff), subdir))
-        t.execute("SELECT id FROM sourcestamps ORDER BY id DESC LIMIT 1")
-        ss.ssid = _one_or_else(t.fetchall(), 0) + 1
+                            " (patchlevel, patch_base64, subdir)"
+                            " VALUES (?,?,?)")
+            t.execute(q, (patchlevel, base64.b64encode(diff), subdir))
+            patchid = t.lastrowid
         t.execute(self.quoteq("INSERT INTO sourcestamps"
-                              " (id, branch, revision, patchid, project, repository)"
-                              " VALUES (?,?,?,?,?,?)"),
-                  (ss.ssid, ss.branch, ss.revision, patchid, ss.project, ss.repository))
+                              " (branch, revision, patchid, project, repository)"
+                              " VALUES (?,?,?,?,?)"),
+                  (ss.branch, ss.revision, patchid, ss.project, ss.repository))
+        ss.ssid = t.lastrowid
         q2 = self.quoteq("INSERT INTO sourcestamp_changes"
                          " (sourcestampid, changeid) VALUES (?,?)")
         for c in ss.changes:
@@ -636,13 +670,12 @@ class DBConnector(util.ComparableMixin):
                         external_idstring=None):
         # this creates both the BuildSet and the associated BuildRequests
         now = self._getCurrentTime()
-        t.execute("SELECT id FROM buildsets ORDER BY id DESC LIMIT 1")
-        bsid = _one_or_else(t.fetchall(), 0) + 1
         t.execute(self.quoteq("INSERT INTO buildsets"
-                              " (id, external_idstring, reason,"
+                              " (external_idstring, reason,"
                               "  sourcestampid, submitted_at)"
-                              " VALUES (?,?,?,?,?)"),
-                  (bsid, external_idstring, reason, ssid, now))
+                              " VALUES (?,?,?,?)"),
+                  (external_idstring, reason, ssid, now))
+        bsid = t.lastrowid
         for propname, propvalue in properties.properties.items():
             encoded_value = json.dumps(propvalue)
             t.execute(self.quoteq("INSERT INTO buildset_properties"
@@ -651,12 +684,11 @@ class DBConnector(util.ComparableMixin):
                       (bsid, propname, encoded_value))
         brids = []
         for bn in builderNames:
-            t.execute("SELECT id FROM buildrequests ORDER BY id DESC LIMIT 1")
-            brid = _one_or_else(t.fetchall(), 0) + 1
             t.execute(self.quoteq("INSERT INTO buildrequests"
-                                  " (id, buildsetid, buildername, submitted_at)"
-                                  " VALUES (?,?,?,?)"),
-                      (brid, bsid, bn, now))
+                                  " (buildsetid, buildername, submitted_at)"
+                                  " VALUES (?,?,?)"),
+                      (bsid, bn, now))
+            brid = t.lastrowid
             brids.append(brid)
         self.notify("add-buildset", bsid)
         self.notify("add-buildrequest", *brids)
@@ -747,6 +779,19 @@ class DBConnector(util.ComparableMixin):
         br.bsid = bsid
         return br
 
+    def get_buildername_for_brid(self, brid):
+        assert isinstance(brid, (int, long))
+        return self.runInteractionNow(self._txn_get_buildername_for_brid, brid)
+    def _txn_get_buildername_for_brid(self, t, brid):
+        assert isinstance(brid, (int, long))
+        t.execute(self.quoteq("SELECT buildername FROM buildrequests"
+                              " WHERE id=?"),
+                  (brid,))
+        r = t.fetchall()
+        if not r:
+            return None
+        return r[0][0]
+
     def get_unclaimed_buildrequests(self, buildername, old, master_name,
                                     master_incarnation, t):
         t.execute(self.quoteq("SELECT br.id"
@@ -785,11 +830,10 @@ class DBConnector(util.ComparableMixin):
         return self.runInteractionNow(self._txn_build_started, brid, buildnumber)
     def _txn_build_started(self, t, brid, buildnumber):
         now = self._getCurrentTime()
-        t.execute("SELECT id FROM builds ORDER BY id DESC LIMIT 1")
-        bid = _one_or_else(t.fetchall(), 0) + 1
-        t.execute(self.quoteq("INSERT INTO builds (id, number, brid, start_time)"
-                              " VALUES (?,?,?,?)"),
-                  (bid, buildnumber, brid, now))
+        t.execute(self.quoteq("INSERT INTO builds (number, brid, start_time)"
+                              " VALUES (?,?,?)"),
+                  (buildnumber, brid, now))
+        bid = t.lastrowid
         self.notify("add-build", bid)
         return bid
 
@@ -855,6 +899,40 @@ class DBConnector(util.ComparableMixin):
         for bsid in bsids:
             self._check_buildset(t, bsid, now)
         self.notify("retire-buildrequest", *brids)
+        self.notify("modify-buildset", *bsids)
+
+    def cancel_buildrequests(self, brids):
+        return self.runInteractionNow(self._txn_cancel_buildrequest, brids)
+    def _txn_cancel_buildrequest(self, t, brids):
+        # TODO: we aren't entirely sure if it'd be safe to just delete the
+        # buildrequest: what else might be waiting on it that would then just
+        # hang forever?. _check_buildset() should handle it well (an empty
+        # buildset will appear complete and SUCCESS-ful). But we haven't
+        # thought it through enough to be sure. So for now, "cancel" means
+        # "mark as complete and FAILURE".
+        if True:
+            now = self._getCurrentTime()
+            q = self.quoteq("UPDATE buildrequests"
+                            " SET complete=1, results=?, complete_at=?"
+                            " WHERE id IN " + self.parmlist(len(brids)))
+            t.execute(q, [FAILURE, now]+brids)
+        else:
+            q = self.quoteq("DELETE FROM buildrequests"
+                            " WHERE id IN " + self.parmlist(len(brids)))
+            t.execute(q, brids)
+
+        # now, does this cause any buildsets to complete?
+        q = self.quoteq("SELECT bs.id"
+                        " FROM buildsets AS bs, buildrequests AS br"
+                        " WHERE br.buildsetid=bs.id AND bs.complete=0"
+                        "  AND br.id in "
+                        + self.parmlist(len(brids)))
+        t.execute(q, brids)
+        bsids = [bsid for (bsid,) in t.fetchall()]
+        for bsid in bsids:
+            self._check_buildset(t, bsid, now)
+
+        self.notify("cancel-buildrequest", *brids)
         self.notify("modify-buildset", *bsids)
 
     def _check_buildset(self, t, bsid, now):
@@ -933,6 +1011,19 @@ class DBConnector(util.ComparableMixin):
             complete = bool(complete)
             return (external_idstring, reason, ssid, complete, results)
         return None # shouldn't happen
+
+    def get_pending_brids_for_builder(self, buildername):
+        return self.runInteractionNow(self._txn_get_pending_brids_for_builder,
+                                      buildername)
+    def _txn_get_pending_brids_for_builder(self, t, buildername):
+        # "pending" means unclaimed and incomplete. When a build is returned
+        # to the pool (self.resubmit_buildrequests), the claimed_at= field is
+        # reset to zero.
+        t.execute(self.quoteq("SELECT id FROM buildrequests"
+                              " WHERE buildername=? AND"
+                              "  complete=0 AND claimed_at=0"),
+                  (buildername,))
+        return [brid for (brid,) in t.fetchall()]
 
     # test/debug methods
 

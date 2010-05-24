@@ -469,6 +469,10 @@ class CVS(SourceBase):
     ['global_options']: a list of strings to use before the CVS verb
     ['checkout_options']: a list of strings to use after checkout,
                           but before revision and branch specifiers
+    ['checkout_options']: a list of strings to use after export,
+                          but before revision and branch specifiers
+    ['extra_options']: a list of strings to use after export and checkout,
+                          but before revision and branch specifiers
     """
 
     header = "cvs operation"
@@ -480,6 +484,8 @@ class CVS(SourceBase):
         self.cvsmodule = args['cvsmodule']
         self.global_options = args.get('global_options', [])
         self.checkout_options = args.get('checkout_options', [])
+        self.export_options = args.get('export_options', [])
+        self.extra_options = args.get('extra_options', [])
         self.branch = args.get('branch')
         self.login = args.get('login')
         self.sourcedata = "%s\n%s\n%s\n" % (self.cvsroot, self.cvsmodule,
@@ -535,7 +541,12 @@ class CVS(SourceBase):
                    self.global_options +
                    [verb, '-d', self.srcdir])
 
-        command += self.checkout_options
+        if verb == "checkout":
+            command += self.checkout_options
+        else:
+            command += self.export_options
+        command += self.extra_options
+
         if self.branch:
             command += ['-r', self.branch]
         if self.revision:
@@ -1424,6 +1435,7 @@ class Mercurial(SourceBase):
         self.branchType = args.get('branchType', 'dirname')
         self.stdout = ""
         self.stderr = ""
+        self.clobbercount = 0 # n times we've clobbered
 
     def sourcedirIsUpdateable(self):
         return os.path.isdir(os.path.join(self.builder.basedir,
@@ -1470,6 +1482,11 @@ class Mercurial(SourceBase):
         return cmd1
 
     def _clobber(self, dummy, dirname):
+        self.clobbercount += 1
+
+        if self.clobbercount > 3:
+            raise Exception, "Too many clobber attempts. Aborting step"
+
         def _vcfull(res):
             return self.doVCFull()
 
@@ -1582,10 +1599,13 @@ class Mercurial(SourceBase):
                 if sys.platform == "win32":
                     oldurl = oldurl.lower().replace('\\', '/')
                     repourl = self.repourl.lower().replace('\\', '/')
-                    if repourl.startswith('file://'):
-                        repourl = repourl.split('file://')[1]
                 else:
                     repourl = self.repourl
+
+                if repourl.startswith('file://'):
+                    repourl = repourl.split('file://')[1]
+                if oldurl.startswith('file://'):
+                    oldurl = oldurl.split('file://')[1]
 
                 oldurl = remove_userpassword(oldurl)
                 repourl = remove_userpassword(repourl)
@@ -1675,7 +1695,7 @@ class P4Base(SourceBase):
         if self.p4user:
             command.extend(['-u', self.p4user])
         if self.p4passwd:
-            command.extend(['-P', self.p4passwd])
+            command.extend(['-P', Obfuscated(self.p4passwd, "XXXXXXXX")])
         if self.p4client:
             command.extend(['-c', self.p4client])
         # add '-s submitted' for bug #626
@@ -1757,7 +1777,7 @@ class P4(P4Base):
         if self.p4user:
             command.extend(['-u', self.p4user])
         if self.p4passwd:
-            command.extend(['-P', self.p4passwd])
+            command.extend(['-P', Obfuscated(self.p4passwd, "XXXXXXXX")])
         if self.p4client:
             command.extend(['-c', self.p4client])
         command.extend(['sync'])
@@ -1800,7 +1820,7 @@ class P4(P4Base):
         if self.p4user:
             command.extend(['-u', self.p4user])
         if self.p4passwd:
-            command.extend(['-P', self.p4passwd])
+            command.extend(['-P', Obfuscated(self.p4passwd, "XXXXXXXX")])
         command.extend(['client', '-i'])
         log.msg(client_spec)
         c = ShellCommand(self.builder, command, self.builder.basedir,
@@ -1850,7 +1870,7 @@ class P4Sync(P4Base):
         if self.p4user:
             command.extend(['-u', self.p4user])
         if self.p4passwd:
-            command.extend(['-P', self.p4passwd])
+            command.extend(['-P', Obfuscated(self.p4passwd, "XXXXXXXX")])
         if self.p4client:
             command.extend(['-c', self.p4client])
         command.extend(['sync'])

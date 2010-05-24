@@ -43,6 +43,7 @@ class Build:
     reason = "changes"
     finished = False
     results = None
+    stopped = False
 
     def __init__(self, requests):
         self.requests = requests
@@ -153,12 +154,12 @@ class Build:
 
         # now set some properties of our own, corresponding to the
         # build itself
-        props.setProperty("buildername", self.builder.name, "Build")
         props.setProperty("buildnumber", self.build_status.number, "Build")
         props.setProperty("branch", self.source.branch, "Build")
         props.setProperty("revision", self.source.revision, "Build")
         props.setProperty("repository", self.source.repository, "Build")
         props.setProperty("project", self.source.project, "Build")
+        self.builder.setupProperties(props)
 
     def setupSlaveBuilder(self, slavebuilder):
         self.slavebuilder = slavebuilder
@@ -268,7 +269,10 @@ class Build:
                 raise
             step.setBuild(self)
             step.setBuildSlave(self.slavebuilder.slave)
-            step.setDefaultWorkdir(self.workdir)
+            if callable (self.workdir):
+                step.setDefaultWorkdir (self.workdir (self.source))
+            else:
+                step.setDefaultWorkdir (self.workdir)
             name = step.name
             if stepnames.has_key(name):
                 count = stepnames[name]
@@ -325,6 +329,8 @@ class Build:
         """This method is called to obtain the next BuildStep for this build.
         When it returns None (or raises a StopIteration exception), the build
         is complete."""
+        if self.stopped:
+            return None
         if not self.steps:
             return None
         if self.terminate:
@@ -420,14 +426,8 @@ class Build:
             return
         # TODO: include 'reason' in this point event
         self.builder.builder_status.addPointEvent(['interrupt'])
+        self.stopped = True
         self.currentStep.interrupt(reason)
-        if 0:
-            # TODO: maybe let its deferred do buildFinished
-            if self.currentStep and self.currentStep.progress:
-                # XXX: really .fail or something
-                self.currentStep.progress.finish()
-            text = ["stopped", reason]
-            self.buildFinished(text, FAILURE)
 
     def allStepsDone(self):
         if self.result == FAILURE:

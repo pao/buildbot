@@ -1,6 +1,6 @@
 # -*- test-case-name: buildbot.test.test_slavecommand -*-
 
-import os, signal, types, time, re
+import os, signal, types, time, re, traceback
 from stat import ST_CTIME, ST_MTIME, ST_SIZE
 from collections import deque
 
@@ -11,6 +11,7 @@ from twisted.python import log, runtime
 
 from buildbot.slave.interfaces import ISlaveCommand
 from buildbot.slave.commands.registry import registerSlaveCommand
+from buildbot import util
 
 # this used to be a CVS $-style "Revision" auto-updated keyword, but since I
 # moved to Darcs as the primary repository, this is updated manually each
@@ -41,6 +42,7 @@ command_version = "2.9"
 #  >= 2.7: added usePTY option to SlaveShellCommand
 #  >= 2.8: added username and password args to SVN class
 #  >= 2.9: add depth arg to SVN class
+#  >= 2.10: CVS can handle 'extra_options' and 'export_options'
 
 class CommandInterrupted(Exception):
     pass
@@ -281,6 +283,24 @@ class ShellCommand:
 
         self.builder = builder
         self.command = Obfuscated.get_real(command)
+
+        # We need to take unicode commands and arguments and encode them using
+        # the appropriate encoding for the slave.  This is mostly platform
+        # specific, but can be overridden in the slave's buildbot.tac file.
+        #
+        # Encoding the command line here ensures that the called executables
+        # receive arguments as bytestrings encoded with an appropriate
+        # platform-specific encoding.  It also plays nicely with twisted's
+        # spawnProcess which checks that arguments are regular strings or
+        # unicode strings that can be encoded as ascii (which generates a
+        # warning).
+        if isinstance(self.command, (tuple, list)):
+            for i, a in enumerate(self.command):
+                if isinstance(a, unicode):
+                    self.command[i] = a.encode(self.builder.unicode_encoding)
+        elif isinstance(self.command, unicode):
+            self.command = self.command.encode(self.builder.unicode_encoding)
+
         self.fake_command = Obfuscated.get_fake(command)
         self.sendStdout = sendStdout
         self.sendStderr = sendStderr
@@ -381,6 +401,9 @@ class ShellCommand:
         except:
             log.msg("error in ShellCommand._startCommand")
             log.err()
+            self._addToBuffers('stderr', "error in ShellCommand._startCommand\n")
+            self._addToBuffers('stderr', traceback.format_exc())
+            self._sendBuffers()
             # pretend it was a shell error
             self.deferred.errback(AbandonChain(-1))
         return self.deferred
@@ -410,7 +433,13 @@ class ShellCommand:
                 argv = ['/bin/sh', '-c', self.command]
             display = self.fake_command
         else:
-            if runtime.platformType  == 'win32' and not self.command[0].lower().endswith(".exe"):
+            # On windows, CreateProcess requires an absolute path to the executable.
+            # When we call spawnProcess below, we pass argv[0] as the executable.
+            # So, for .exe's that we have absolute paths to, we can call directly
+            # Otherwise, we should run under COMSPEC (usually cmd.exe) to
+            # handle path searching, etc.
+            if runtime.platformType == 'win32' and not \
+                    (self.command[0].lower().endswith(".exe") and os.path.isabs(self.command[0])):
                 argv = os.environ['COMSPEC'].split() # allow %COMSPEC% to have args
                 if '/c' not in argv: argv += ['/c']
                 argv += list(self.command)
@@ -491,9 +520,7 @@ class ShellCommand:
         # called right after we return, but somehow before connectionMade
         # were called, then kill() would blow up).
         self.process = None
-        self.startTime = self._reactor.seconds()
-
-        for arg in argv: assert isinstance(arg, str), (type(arg), arg)
+        self.startTime = util.now(self._reactor)
 
         p = reactor.spawnProcess(self.pp, argv[0], argv,
                                  self.environ,
@@ -644,7 +671,7 @@ class ShellCommand:
             self.timer.reset(self.timeout)
 
     def finished(self, sig, rc):
-        self.elapsedTime = self._reactor.seconds() - self.startTime
+        self.elapsedTime = util.now(self._reactor) - self.startTime
         log.msg("command finished with signal %s, exit code %s, elapsedTime: %0.6f" % (sig,rc,self.elapsedTime))
         for w in self.logFileWatchers:
             # this will send the final updates

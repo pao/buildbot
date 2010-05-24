@@ -45,6 +45,7 @@ from twisted.enterprise import adbapi
 
 from buildbot.db.connector import DBConnector
 from buildbot.db.exceptions import *
+from buildbot import util
 
 class ExpiringConnectionPool(adbapi.ConnectionPool):
     """
@@ -66,7 +67,7 @@ class ExpiringConnectionPool(adbapi.ConnectionPool):
 
     def connect(self):
         tid = self.threadID()
-        now = time.time()
+        now = util.now()
         lastused = self.connection_lastused.get(tid)
         if lastused and lastused + self.max_idle < now:
             conn = self.connections.get(tid)
@@ -82,6 +83,62 @@ class ExpiringConnectionPool(adbapi.ConnectionPool):
         adbapi.ConnectionPool.disconnect(self, conn)
         tid = self.threadID()
         del self.connection_lastused[tid]
+
+class TimeoutError(Exception):
+    def __init__(self, msg):
+        Exception.__init__(self, msg)
+
+class RetryingCursor:
+    max_retry_time = 1800 # Half an hour
+    max_sleep_time = 1
+
+    def __init__(self, dbapi, cursor):
+        self.dbapi = dbapi
+        self.cursor = cursor
+
+    def sleep(self, s):
+        time.sleep(s)
+
+    def execute(self, *args, **kw):
+        start_time = util.now()
+        sleep_time = 0.1
+        while True:
+            try:
+                query_start_time = util.now()
+                result = self.cursor.execute(*args, **kw)
+                end_time = util.now()
+                if end_time - query_start_time > 2:
+                    log.msg("Long query (%is): %s" % ((end_time - query_start_time), str((args, kw))))
+                return result
+            except self.dbapi.OperationalError, e:
+                if e.args[0] == 'database is locked':
+                    # Retry
+                    log.msg("Retrying query %s" % str((args, kw)))
+                    now = util.now()
+                    if start_time + self.max_retry_time < now:
+                        raise TimeoutError("Exceeded timeout trying to do %s" % str((args, kw)))
+                    self.sleep(sleep_time)
+                    sleep_time = max(self.max_sleep_time, sleep_time * 2)
+                    continue
+                raise
+
+    def __getattr__(self, name):
+        return getattr(self.cursor, name)
+
+class RetryingConnection:
+    def __init__(self, dbapi, conn):
+        self.dbapi = dbapi
+        self.conn = conn
+
+    def cursor(self):
+        return RetryingCursor(self.dbapi, self.conn.cursor())
+
+    def __getattr__(self, name):
+        return getattr(self.conn, name)
+
+class RetryingConnectionPool(adbapi.ConnectionPool):
+    def connect(self):
+        return RetryingConnection(self.dbapi, adbapi.ConnectionPool.connect(self))
 
 class DBSpec(object):
     """
@@ -156,7 +213,7 @@ class DBSpec(object):
             if 'max_idle' in args:
                 args['max_idle'] = int(args['max_idle'])
 
-            return cls("MySQLdb", **args)
+            return cls("MySQLdb", use_unicode=True, charset="utf8", **args)
         else:
             raise ValueError("Unsupported dbapi %s" % driver)
 
@@ -178,15 +235,15 @@ class DBSpec(object):
 
     def get_dbapi(self):
         """
-        Get the dbapi module used for this connection (for things like exceptions
-        and module-global attributes
+        Get the dbapi module used for this connection (for things like
+        exceptions and module-global attributes
         """
         return reflect.namedModule(self.dbapiName)
 
     def get_sync_connection(self):
         """
-        Get a synchronous connection to the specified database.  This returns a simple
-        DBAPI connection object.
+        Get a synchronous connection to the specified database.  This returns
+        a simple DBAPI connection object.
         """
         dbapi = self.get_dbapi()
         connkw = self.connkw.copy()
@@ -194,11 +251,14 @@ class DBSpec(object):
             if arg in connkw:
                 del connkw[arg]
         conn = dbapi.connect(*self.connargs, **connkw)
+        if 'sqlite' in self.dbapiName:
+            conn = RetryingConnection(dbapi, conn)
         return conn
 
     def get_async_connection_pool(self):
         """
-        Get an asynchronous (adbapi) connection pool for the specified database.
+        Get an asynchronous (adbapi) connection pool for the specified
+        database.
         """
 
         # add some connection keywords
@@ -219,4 +279,10 @@ class DBSpec(object):
         if self.dbapiName == 'MySQLdb':
             return ExpiringConnectionPool(self.dbapiName, *self.connargs, **connkw)
         else:
-            return adbapi.ConnectionPool(self.dbapiName, *self.connargs, **connkw)
+            return RetryingConnectionPool(self.dbapiName, *self.connargs, **connkw)
+
+    def get_maxidle(self):
+        default = None
+        if self.dbapiName == "MySQLdb":
+            default = 60
+        return self.connkw.get("max_idle", default)

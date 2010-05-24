@@ -97,9 +97,9 @@ class ChangeManager(service.MultiService):
     def addChange(self, change):
         """Deliver a file change event. The event should be a Change object.
         This method will timestamp the object as it is received."""
-        log.msg("adding change, who %s, %d files, rev=%s, branch=%s, "
+        log.msg("adding change, who %s, %d files, rev=%s, branch=%s, repository=%s, "
                 "comments %s, category %s" % (change.who, len(change.files),
-                                              change.revision, change.branch,
+                                              change.revision, change.branch, change.repository,
                                               change.comments, change.category))
 
         #self.pruneChanges() # use self.changeHorizon
@@ -127,3 +127,5 @@ class ChangeManager(service.MultiService):
         return self.parent.db.getChangesGreaterThan(last_changeid, t)
     def getChangesByNumber(self, changeids):
         return self.parent.db.getChangesByNumber(changeids)
+    def getLatestChangeNumberNow(self, t=None):
+        return self.parent.db.getLatestChangeNumberNow(t)
