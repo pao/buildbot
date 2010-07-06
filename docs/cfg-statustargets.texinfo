@@ -59,10 +59,11 @@ server and retrieve information about every build the buildbot knows
 about, as well as find out what the buildbot is currently working on.
 
 The first page you will see is the ``Welcome Page'', which contains
-links to all the other useful pages. This page is simply served from
-the @file{public_html/index.html} file in the buildmaster's base
-directory, where it is created by the @command{buildbot create-master}
-command along with the rest of the buildmaster.
+links to all the other useful pages. By default, this page is served from
+the @file{status/web/templates/root.html} file in buildbot's library area.
+If you'd like to override this page or the other templates found there,
+copy the files you're interested in into a @file{templates/} directory in
+the buildmaster's base directory.
 
 One of the most complex resource provided by @code{WebStatus} is the
 ``Waterfall Display'', which shows a time-based chart of events. This
@@ -86,18 +87,20 @@ in great detail below.
 
 @heading Configuration
 
-When the buildmaster is created, a subdirectory named
-@file{public_html/} is created in its base directory. By default, @code{WebStatus}
-will serve files from this directory: for example, when a user points
-their browser at the buildbot's @code{WebStatus} URL, they will see
-the contents of the @file{public_html/index.html} file. Likewise,
-@file{public_html/robots.txt}, @file{public_html/buildbot.css}, and
-@file{public_html/favicon.ico} are all useful things to have in there.
-The first time a buildmaster is created, the @file{public_html}
+Buildbot now uses a templating system for the web interface. The source
+of these templates can be found in the @file{status/web/templates/} directory
+in buildbot's library area. You can override these templates by creating
+alternate versions in a @file{templates/} directory within the buildmaster's
+base directory.
+
+The first time a buildmaster is created, the @file{public_html/}
 directory is populated with some sample files, which you will probably
 want to customize for your own project. These files are all static:
 the buildbot does not modify them in any way as it serves them to HTTP
 clients.
+
+Note that templates in @file{templates/} take precedence over static files in
+@file{public_html/}.
 
 @example
 from buildbot.status.html import WebStatus
@@ -458,6 +461,10 @@ stop all running builds
 
 cancel a build that has not yet started
 
+@item cleanShutdown
+
+shut down the master gracefully, without interrupting builds
+
 @end table
 
 For each of these actions, you can configure buildbot to never allow the
@@ -772,8 +779,19 @@ mn = MailNotifier(fromaddr="buildbot@@example.org",
                   extraRecipients=['listaddr@@example.org'])
 @end example
 
-If your SMTP host only allows you to send emails if you authenticate
-over TLS. This can also be done:
+If your SMTP host requires authentication before it allows you to send emails,
+this can also be done by specifying ``smtpUser'' and ``smptPassword'':
+
+@example
+mn = MailNotifier(fromaddr="myuser@@gmail.com",
+                  sendToInterestedUsers=False,
+                  extraRecipients=["listaddr@@example.org"],
+                  relayhost="smtp.gmail.com", smtpPort=587,
+                  smtpUser="myuser@@gmail.com", smtpPassword="mypassword")
+@end example
+
+If you want to require Transport Layer Security (TLS), then you can also
+set ``useTls'':
 
 @example
 mn = MailNotifier(fromaddr="myuser@@gmail.com",
@@ -853,7 +871,13 @@ def message_formatter(mode, name, build, results, master_status):
     text.append("Blamelist: %s" % ",".join(build.getResponsibleUsers()))
     if ss.changes:
         text.append('<h4>Recent Changes:</h4>')
-        text.extend([c.asHTML() for c in ss.changes])
+        text.append('See the <b>All Changes</b> section of the build log'
+                    ' for changes in this build: <a href="%s">%s</a>'
+                    % (master_status.getURLForThing(build),
+                       master_status.getURLForThing(build))
+                    )
+    text.append('<br>')
+    text.append('<br>')
 
     logs = list()
     for log in build.getLogs():
@@ -960,16 +984,16 @@ connections. Defaults to 25.
 @item useTls
 (boolean). When this argument is @code{True} (default is @code{False})
 @code{MailNotifier} sends emails using TLS and authenticates with the
-@code{ralayhost}. When using TLS the arguments @code{smtUser} and
+@code{relayhost}. When using TLS the arguments @code{smtpUser} and
 @code{smtpPassword} must also be specified.
 
 @item smtpUser
 (string). The user name to use when authenticating with the
-@code{relayhost}. Only used when @code{useTls} is @code{True}.
+@code{relayhost}. 
 
 @item smtpPassword
 (string). The password that will be used when authenticating with the
-@code{relayhost}. Only used when @code{useTls} is @code{True}.
+@code{relayhost}.
 
 @item lookup
 (implementor of @code{IEmailLookup}). Object which provides
@@ -1055,8 +1079,9 @@ A change object has the following useful information:
 @item comments
 (str) comments reguarding the change.
 @end table
-The @code{Change} methods asText and asHTML return a list of strings with
-the above information formatted.
+The @code{Change} methods asText and asDict can be used to format the
+information above.  asText returns a list of strings and asDict returns
+a dictonary suitable for html/mail rendering.
 @item Log information
 @example
 logs = list()
@@ -1138,7 +1163,7 @@ A build has started
 A build has finished
 @item success
 A build finished successfully
-@item failed
+@item failure
 A build failed
 @item exception
 A build generated and exception
