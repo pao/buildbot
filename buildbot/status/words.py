@@ -161,6 +161,23 @@ class Contact(base.StatusReceiver):
             return
     command_LIST.usage = "list builders - List configured builders"
 
+    def command_DUMPLOG(self, args, who):
+        args = shlex.split(args)
+        if len(args) == 4:
+            which = args[0]
+            build = args[1]
+            logname = args[2]
+            lognum = args[3]
+        else:
+            raise UsageError, "try 'dumplog <builder> <build> <step> <lognum>'"
+        b = self.getBuilder(which)
+        log = [s.getLogs()[int(lognum)] for s in b.getBuild(int(build)).getSteps() 
+                if s.getName() == logname][0]
+	self.send('Contents of log %s.%s' % (logname, log.getName()))
+        for delay, line in enumerate(log.getText().split('\n')):
+            reactor.callLater(delay, self.send, line)
+    command_DUMPLOG.usage = "dumplog <builder> <build> <step> <log> - Dump the 'lognum'th log from step named 'step'"
+
     def command_STATUS(self, args, who):
         args = shlex.split(args)
         if len(args) == 0:
