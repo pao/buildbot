@@ -162,7 +162,6 @@ class Contact(base.StatusReceiver):
             return
     command_LIST.usage = "list builders - List configured builders"
 
-<<<<<<< HEAD:buildbot/status/words.py
     def command_DUMPLOG(self, args, who):
         args = shlex.split(args)
         if len(args) == 4:
@@ -178,8 +177,8 @@ class Contact(base.StatusReceiver):
 	self.send('Contents of log %s.%s' % (logname, log.getName()))
         for delay, line in enumerate(log.getText().split('\n')):
             reactor.callLater(delay, self.send, line)
-    command_DUMPLOG.usage = "dumplog <builder> <build> <step> <log> - Dump the 'lognum'th log from step named 'step'"
-=======
+    command_DUMPLOG.usage = "dumplog <builder> <build> <step> <lognum> - Dump the 'lognum'th log from step named 'step'"
+
     def command_CHANGELOG(self, args, who):
         args = shlex.split(args)
         if len(args) == 1:
@@ -283,7 +282,6 @@ class Contact(base.StatusReceiver):
                 reactor.callLater(delay, self.send, link)
         else:
             self.send("No changes from build %d to build %d." % (build_from, build_to))
->>>>>>> ctso/master:master/buildbot/status/words.py
 
     def command_STATUS(self, args, who):
         args = shlex.split(args)
