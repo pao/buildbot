@@ -283,6 +283,7 @@ class Contact(base.StatusReceiver):
             self.send("Changes from build %d to build %d:" % (build_from, build_to))
             for delay, link in enumerate(delta_links):
                 reactor.callLater(delay, self.send, link)
+            reactor.callLater(delay+1, self.send, "End of changes.")
         else:
             self.send("No changes from build %d to build %d." % (build_from, build_to))
 
