@@ -186,7 +186,7 @@ class Contact(base.StatusReceiver):
         skip_a_bit = False
         for l in log.getText().split('\n'):
             if "git://" in l:
-		if "github" in l:
+		if "github.com" in l or "android.git.kernel.org" in l:
                     skip_a_bit = False
                     url_base = l.strip().split('//')[1]
                 else:
@@ -218,19 +218,40 @@ class Contact(base.StatusReceiver):
         for base_url, branchlog in net_change.iteritems():
             for branch, sha1s in branchlog.iteritems():
                 if sha1s[0] is None:
-                    delta_links.append(''.join(['New: http://',
-                                                 base_url,
-                                                 '/commits/',
-                                                 branch,
-                                                 ]))
+                    if "github" in base_url:
+                        delta_links.append(''.join(['New: http://',
+                                                    base_url,
+                                                    '/commits/',
+                                                    branch,
+                                                    ]))
+                    else:
+                        url_parts = base_url.split('/')
+                        delta_links.append(''.join(['New: http://',
+                                                    url_parts[0],
+                                                    '/?p=',
+                                                    '/'.join(url_parts[1:]),
+                                                    '.git;a=shortlog',
+                                                    ]))
                 else:
-                    delta_links.append(''.join(['http://',
-                                                 base_url,
-                                                 '/compare/',
-                                                 sha1s[0],
-                                                 '...',
-                                                 sha1s[-1],
-                                                 ]))
+                    if "github" in base_url:
+                        delta_links.append(''.join(['http://',
+                                                    base_url,
+                                                    '/compare/',
+                                                    sha1s[0],
+                                                    '...',
+                                                    sha1s[-1],
+                                                    ]))
+                    else:
+                        url_parts = base_url.split('/')
+                        delta_links.append(''.join(['http://',
+                                                    url_parts[0],
+                                                    '/?p=',
+                                                    '/'.join(url_parts[1:]),
+                                                    '.git;a=commitdiff;hp=',
+                                                    sha1s[0],
+                                                    ';h=',
+                                                    sha1s[-1],
+                                                    ]))
         return delta_links
 
     def emit_changelinks(self, which, build_from, build_to):
