@@ -258,7 +258,7 @@ class Contact(base.StatusReceiver):
 
     def emit_changelinks(self, which, build_from, build_to):
         b = self.getBuilder(which)
-        
+
         if "repo sync" in [s.getName() for s in b.getBuild(-1).getSteps()
                             if s.isFinished()]:
             build_latest = b.getBuild(-1).getNumber()
@@ -275,6 +275,10 @@ class Contact(base.StatusReceiver):
             
         if build_from >= build_to:
             raise UsageError('final build (%d) should be later than source build (%d)' % (build_to, build_from))
+        if build_from < 0 or build_from > build_latest-1:
+            raise UsageError('source build (%d) must be between 0 and %d' % (build_from, build_latest-1))
+        if build_to < 1 or build_to > build_latest:
+            raise UsageError('final build (%d) must be between 1 and %d' % (build_to, build_latest))
             
         commitlogs = None
         for i in range(build_from+1, build_to+1):
