@@ -200,6 +200,8 @@ class Contact(base.StatusReceiver):
                     sha1s = [None]
                     branch = details[3]
                 elif "froyo" in l:
+                    if details[0] == "+":
+                        del details[0]
                     sha1s = details[0].split('..')
                     branch = details[1]
                 else:
