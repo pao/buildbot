@@ -502,14 +502,17 @@ li {
 
 span.stdout {
 	color: black;
+        font-size: 90%;
 }
 
 span.stderr {
 	color: red;
+        font-size: 90%;
 }
 
 span.header {
 	color: blue;
+        font-size: 90%;
 }
 
 /* revision & email */
