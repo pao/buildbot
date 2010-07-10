@@ -3,7 +3,6 @@
 # protocols: irc, etc)
 
 import re, shlex
-from collections import defaultdict
 from string import join, capitalize, lower
 
 from zope.interface import Interface, implements
@@ -177,121 +176,8 @@ class Contact(base.StatusReceiver):
             build_to = args[2]
         else:
             raise UsageError, "try 'changelog <builder>'"
-        self.emit_changelinks(which, build_from, build_to)
+        self.send("%schangelog/%s/%s%s%s" % (self.channel.status.getBuildbotURL(), which, build_from or '', '...' if build_from else '', build_to or ''))
     command_CHANGELOG.usage = "changelog <builder> [<from> [<to>]] - List changes between build #s"
-
-    def parse_synclog(self, log, accum_change = None):
-        if accum_change is None:
-            accum_change = defaultdict(lambda: defaultdict(list))
-        skip_a_bit = False
-        for l in log.getText().split('\n'):
-            if "git://" in l:
-		if "github.com" in l or "android.git.kernel.org" in l:
-                    skip_a_bit = False
-                    url_base = l.strip().split('//')[1]
-                else:
-                    skip_a_bit = True
-            if skip_a_bit:
-                continue
-            if "->" in l:
-                details = l.strip().split()
-                #explicit froyo check to improve snr
-                if "[new branch]" in l and "froyo" in l:
-                    sha1s = [None]
-                    branch = details[3]
-                elif "froyo" in l:
-                    if details[0] == "+":
-                        del details[0]
-                    sha1s = details[0].split('..')
-                    branch = details[1]
-                else:
-                    continue
-                accum_change[url_base][branch].extend(sha1s)
-            elif l == '\n' or "Initializing project" in l:
-                pass
-            else:
-                #unrecognized line
-                pass 
-        return accum_change
-
-    def delta_synclog(self, net_change):
-        # Turn the net change dictionary into links
-        delta_links = []
-        for base_url, branchlog in net_change.iteritems():
-            for branch, sha1s in branchlog.iteritems():
-                if sha1s[0] is None:
-                    if "github" in base_url:
-                        delta_links.append(''.join(['New: http://',
-                                                    base_url,
-                                                    '/commits/',
-                                                    branch,
-                                                    ]))
-                    else:
-                        url_parts = base_url.split('/')
-                        delta_links.append(''.join(['New: http://',
-                                                    url_parts[0],
-                                                    '/?p=',
-                                                    '/'.join(url_parts[1:]),
-                                                    '.git;a=shortlog',
-                                                    ]))
-                else:
-                    if "github" in base_url:
-                        delta_links.append(''.join(['http://',
-                                                    base_url,
-                                                    '/compare/',
-                                                    sha1s[0],
-                                                    '...',
-                                                    sha1s[-1],
-                                                    ]))
-                    else:
-                        url_parts = base_url.split('/')
-                        delta_links.append(''.join(['http://',
-                                                    url_parts[0],
-                                                    '/?p=',
-                                                    '/'.join(url_parts[1:]),
-                                                    '.git;a=commitdiff;hp=',
-                                                    sha1s[0],
-                                                    ';h=',
-                                                    sha1s[-1],
-                                                    ]))
-        return delta_links
-
-    def emit_changelinks(self, which, build_from, build_to):
-        b = self.getBuilder(which)
-
-        if "repo sync" in [s.getName() for s in b.getBuild(-1).getSteps()
-                            if s.isFinished()]:
-            build_latest = b.getBuild(-1).getNumber()
-        else:
-            build_latest = b.getBuild(-2).getNumber()
-        if build_from is None:
-            build_from = build_latest - 1
-        else:
-            build_from = int(build_from)
-        if build_to is None:
-            build_to = build_latest
-        else:
-            build_to = int(build_to)
-            
-        if build_from >= build_to:
-            raise UsageError('final build (%d) should be later than source build (%d)' % (build_to, build_from))
-        if build_from < 0 or build_from > build_latest-1:
-            raise UsageError('source build (%d) must be between 0 and %d' % (build_from, build_latest-1))
-        if build_to < 1 or build_to > build_latest:
-            raise UsageError('final build (%d) must be between 1 and %d' % (build_to, build_latest))
-            
-        commitlogs = None
-        for i in range(build_from+1, build_to+1):
-            commitlogs = self.parse_synclog([s.getLogs()[0] for s in b.getBuild(i).getSteps() 
-                if s.getName() == "repo sync"][0], commitlogs)
-        delta_links = self.delta_synclog(commitlogs)
-        if delta_links:
-            self.send("Changes from build %d to build %d:" % (build_from, build_to))
-            for delay, link in enumerate(delta_links):
-                reactor.callLater(delay, self.send, link)
-            reactor.callLater(delay+1, self.send, "End of changes.")
-        else:
-            self.send("No changes from build %d to build %d." % (build_from, build_to))
 
     def command_STATUS(self, args, who):
         args = shlex.split(args)
