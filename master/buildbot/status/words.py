@@ -3,7 +3,6 @@
 # protocols: irc, etc)
 
 import re, shlex
-from collections import defaultdict
 from string import join, capitalize, lower
 
 from zope.interface import Interface, implements

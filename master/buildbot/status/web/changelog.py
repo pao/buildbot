@@ -1,11 +1,6 @@
 
 from buildbot.status.web.base import HtmlResource
 from collections import defaultdict
-import buildbot
-import twisted
-import sys
-import jinja2
-
 
 class BuilderChangelog(HtmlResource):
     title = "Builder Changelog"
