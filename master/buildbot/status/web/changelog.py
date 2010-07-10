@@ -30,17 +30,14 @@ class BuilderChangelog(HtmlResource):
                 continue
             if "->" in l:
                 details = l.strip().split()
-                #explicit froyo check to improve snr
-                if "[new branch]" in l and "froyo" in l:
+                if "[new branch]" in l:
                     sha1s = [None]
                     branch = details[3]
-                elif "froyo" in l:
+                else:
                     if details[0] == "+":
                         del details[0]
                     sha1s = details[0].split('..')
                     branch = details[1]
-                else:
-                    continue
                 accum_change[url_base][branch].extend(sha1s)
             elif l == '\n' or "Initializing project" in l:
                 pass
