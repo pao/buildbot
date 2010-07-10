@@ -115,11 +115,11 @@ class BuilderChangelog(HtmlResource):
             build_to = int(build_to)
             
         if build_from >= build_to:
-            raise UsageError('final build (%d) should be later than source build (%d)' % (build_to, build_from))
+            return 'Final build (%d) should be later than source build (%d).' % (build_to, build_from), build_from, build_to
         if build_from < 0 or build_from > build_latest-1:
-            raise UsageError('source build (%d) must be between 0 and %d' % (build_from, build_latest-1))
+            return 'Source build (%d) must be between 0 and %d.' % (build_from, build_latest-1), build_from, build_to
         if build_to < 1 or build_to > build_latest:
-            raise UsageError('final build (%d) must be between 1 and %d' % (build_to, build_latest))
+            return 'Final build (%d) must be between 1 and %d.' % (build_to, build_latest), build_from, build_to
             
         commitlogs = None
         for i in range(build_from+1, build_to+1):
@@ -160,6 +160,12 @@ class BuilderChangelogParent(HtmlResource):
             build_from = buildnums[0]
             build_to = buildnums[1]
         return BuilderChangelog(self.builder_str, build_from, build_to)
+
+    def content(self, request, cxt):
+        cxt.update(dict(content="<h2>Must name a builder.</h2>"))
+        template = request.site.buildbot_service.templates.get_template("empty.html")
+        template.autoescape = True
+        return template.render(**cxt)
 
 class Changelog(HtmlResource):
     def getChild(self, name, request):
