@@ -1,5 +1,6 @@
 
 from buildbot.status.web.base import HtmlResource
+import buildbot.interfaces as interfaces
 from collections import defaultdict
 
 class BuilderChangelog(HtmlResource):    
@@ -19,7 +20,7 @@ class BuilderChangelog(HtmlResource):
         if accum_change is None:
             accum_change = defaultdict(lambda: defaultdict(list))
         skip_a_bit = False
-        for l in log.getText().split('\n'):
+        for l in log.readlines(channel=interfaces.LOG_CHANNEL_STDERR):
             if "git://" in l:
 		if "github.com" in l or "android.git.kernel.org" in l:
                     skip_a_bit = False
