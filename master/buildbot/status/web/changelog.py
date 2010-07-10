@@ -149,7 +149,17 @@ class BuilderChangelogParent(HtmlResource):
         self.builder_str = builder_str
         
     def getChild(self, name, request):
-        return BuilderChangelog(self.builder_str, *[num for num in name.split('.') if num != ''][0:2])
+        buildnums = [num for num in name.split('.') if num != '']
+        if len(buildnums) == 0:
+            build_from = None
+            build_to = None
+        elif len(buildnums) == 1:
+            build_from = buildnums[0]
+            build_to = None
+        else:
+            build_from = buildnums[0]
+            build_to = buildnums[1]
+        return BuilderChangelog(self.builder_str, build_from, build_to)
 
 class Changelog(HtmlResource):
     def getChild(self, name, request):

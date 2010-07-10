@@ -177,7 +177,7 @@ class Contact(base.StatusReceiver):
             build_to = args[2]
         else:
             raise UsageError, "try 'changelog <builder>'"
-        self.send("%schangelog/%s/%s%s%s" % (self.channel.status.getBuildbotURL(), which, build_from or '', '...' if build_to else '', build_to or ''))
+        self.send("%schangelog/%s/%s%s%s" % (self.channel.status.getBuildbotURL(), which, build_from or '', '...' if build_from else '', build_to or ''))
     command_CHANGELOG.usage = "changelog <builder> [<from> [<to>]] - List changes between build #s"
 
     def command_STATUS(self, args, who):
