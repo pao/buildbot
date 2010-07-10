@@ -7,7 +7,7 @@ import sys
 import jinja2
 
 
-class Changelog(HtmlResource):
+class BuilderChangelog(HtmlResource):
     title = "Builder Changelog"
     
     stat = None
@@ -142,8 +142,15 @@ class Changelog(HtmlResource):
         template.autoescape = True
         return template.render(**cxt)
 
-class BuilderChangelog(HtmlResource):
-    def getChild(self, name, request):
-        buildnums = [num for num in name.split('.') if num != '']
+class BuilderChangelogParent(HtmlResource):
+    builder_str = ''
+    def __init__(self, builder_str):
+        HtmlResource.__init__(self)
+        self.builder_str = builder_str
         
-        return Changelog('cm_passion', *[num for num in name.split('.') if num != ''][0:2])
+    def getChild(self, name, request):
+        return BuilderChangelog(self.builder_str, *[num for num in name.split('.') if num != ''][0:2])
+
+class Changelog(HtmlResource):
+    def getChild(self, name, request):
+        return BuilderChangelogParent(name)
