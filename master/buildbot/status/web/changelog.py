@@ -2,10 +2,9 @@
 from buildbot.status.web.base import HtmlResource
 from collections import defaultdict
 
-class BuilderChangelog(HtmlResource):
-    title = "Builder Changelog"
-    
+class BuilderChangelog(HtmlResource):    
     stat = None
+    title = ''
     builder_str = ''
     build_from_str = ''
     build_to_str = ''
@@ -127,10 +126,12 @@ class BuilderChangelog(HtmlResource):
         self.stat = self.getStatus(request)
         (links_str, build_from, build_to) = self.emit_changelinks(self.builder_str, self.build_from_str, self.build_to_str)
 
+        title = "Changes in %s from %d to %d" % (self.builder_str, build_from, build_to)
         cxt.update(dict(changelinks=links_str,
                         builder=self.builder_str,
                         build_from=build_from,
                         build_to=build_to,
+                        title=title,
                         ))
 
         template = request.site.buildbot_service.templates.get_template("changelog.html")
