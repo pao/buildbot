@@ -30,7 +30,6 @@ class BuilderChangelog(HtmlResource):
                 continue
             if "->" in l:
                 details = l.strip().split()
-                #explicit froyo check to improve snr
                 if "[new branch]" in l:
                     sha1s = [None]
                     branch = details[3]
