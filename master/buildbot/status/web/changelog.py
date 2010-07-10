@@ -7,10 +7,19 @@ import sys
 import jinja2
 
 
-class BuilderChangelog(HtmlResource):
+class Changelog(HtmlResource):
     title = "Builder Changelog"
     
     stat = None
+    builder_str = ''
+    build_from_str = ''
+    build_to_str = ''
+
+    def __init__(self, builder_str, build_from_str, build_to_str):
+        HtmlResource.__init__(self)
+        self.builder_str = builder_str
+        self.build_from_str = build_from_str
+        self.build_to_str = build_to_str
 
     def parse_synclog(self, log, accum_change = None):
         if accum_change is None:
@@ -121,13 +130,10 @@ class BuilderChangelog(HtmlResource):
 
     def content(self, request, cxt):
         self.stat = self.getStatus(request)
-        builder = "cm_passion"
-        build_from = None
-        build_to = None
-        (links_str, build_from, build_to) = self.emit_changelinks(builder, build_from, build_to)
+        (links_str, build_from, build_to) = self.emit_changelinks(self.builder_str, self.build_from_str, self.build_to_str)
 
         cxt.update(dict(changelinks=links_str,
-                        builder=builder,
+                        builder=self.builder_str,
                         build_from=build_from,
                         build_to=build_to,
                         ))
@@ -135,3 +141,9 @@ class BuilderChangelog(HtmlResource):
         template = request.site.buildbot_service.templates.get_template("changelog.html")
         template.autoescape = True
         return template.render(**cxt)
+
+class BuilderChangelog(HtmlResource):
+    def getChild(self, name, request):
+        buildnums = [num for num in name.split('.') if num != '']
+        
+        return Changelog('cm_passion', *[num for num in name.split('.') if num != ''][0:2])
