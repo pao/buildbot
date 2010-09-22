@@ -832,6 +832,58 @@ class Git(Source):
         cmd = LoggedRemoteCommand("git", self.args)
         self.startCommand(cmd)
 
+class Repo(Source):
+    """Check out a source tree from a repo repository 'repourl'."""
+
+    name = "repo"
+
+    def __init__(self, repourl=None,
+                 manifest_branch=None,
+                 manifest=None,
+                 repotarball=None,
+                 **kwargs):
+        """
+        @type  repourl: string
+        @param repourl: the URL which points at the repo manifests repository
+
+        @type  manifest_branch: string
+        @param manifest_branch: The manifest branch to check out by default.
+
+        @type  manifest: string
+        @param manifest: The manifest to use for sync.
+
+        """
+        Source.__init__(self, **kwargs)
+        self.repourl = repourl
+        self.addFactoryArguments(repourl=repourl,
+                                 manifest_branch=manifest_branch,
+                                 manifest=manifest,
+                                 repotarball=repotarball,
+                                 )
+        self.args.update({'manifest_branch': manifest_branch,
+                          'manifest': manifest,
+                          'repotarball': repotarball,
+                          })
+
+    def computeSourceRevision(self, changes):
+        if not changes:
+            return None
+        return changes[-1].revision
+
+    def startVC(self, branch, revision, patch):
+        if branch is not None:
+            self.args['branch'] = branch
+
+        self.args['repourl'] = self.computeRepositoryURL(self.repourl)                  
+        self.args['revision'] = revision
+        self.args['patch'] = patch
+        slavever = self.slaveVersion("repo")
+        if not slavever:
+            raise BuildSlaveTooOldError("slave is too old, does not know "
+                                        "about repo")
+        cmd = LoggedRemoteCommand("repo", self.args)
+        self.startCommand(cmd)
+
 
 class Bzr(Source):
     """Check out a source tree from a bzr (Bazaar) repository at 'repourl'.
