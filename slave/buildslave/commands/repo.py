@@ -12,7 +12,7 @@ class Repo(SourceBaseCommand):
     handled by SourceBaseCommand, this command reads the following keys:
 
     ['repourl'] (required):     the manifest GIT repository string
-    ['repotarball'] (required): the tarball base to accelerate the fetch
+    ['repotarball'] (optional): the tarball base to accelerate the fetch
     ['manifest_branch'] (optional):     which manifest repo version (i.e. branch or tag) to
                                retrieve. Default: "master".
     ['manifest'] (optional):   Which manifest to use. Default: "default.xml".
@@ -83,7 +83,6 @@ class Repo(SourceBaseCommand):
 
     def doVCFull(self):
         os.makedirs(self._fullSrcdir())
-        print "repotarball",self.repotarball , os.path.exists(self.repotarball)
         if self.repotarball and os.path.exists(self.repotarball):
             return self._tarCmd(['-xvzf',self.repotarball], self._doInit)
         else:
