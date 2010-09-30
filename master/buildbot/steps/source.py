@@ -766,7 +766,9 @@ class Git(Source):
                  branch="master",
                  submodules=False,
                  ignore_ignores=None,
+                 reference=None,
                  shallow=False,
+                 progress=False,
                  **kwargs):
         """
         @type  repourl: string
@@ -781,8 +783,17 @@ class Git(Source):
         @param submodules: Whether or not to update (and initialize)
                        git submodules.
 
+        @type  reference: string
+        @param reference: The path to a reference repository to obtain
+                          objects from, if any.
+
         @type  shallow: boolean
         @param shallow: Use a shallow or clone, if possible
+
+        @type  progress: boolean
+        @param progress: Pass the --progress option when fetching. This
+                         can solve long fetches getting killed due to
+                         lack of output, but requires Git 1.7.2+.
         """
         Source.__init__(self, **kwargs)
         self.repourl = repourl
@@ -790,12 +801,16 @@ class Git(Source):
                                  branch=branch,
                                  submodules=submodules,
                                  ignore_ignores=ignore_ignores,
+                                 reference=reference,
                                  shallow=shallow,
+                                 progress=progress,
                                  )
         self.args.update({'branch': branch,
                           'submodules': submodules,
                           'ignore_ignores': ignore_ignores,
+                          'reference': reference,
                           'shallow': shallow,
+                          'progress': progress,
                           })
 
     def computeSourceRevision(self, changes):
@@ -817,175 +832,58 @@ class Git(Source):
         cmd = LoggedRemoteCommand("git", self.args)
         self.startCommand(cmd)
 
+class Repo(Source):
+    """Check out a source tree from a repo repository 'repourl'."""
 
-class Arch(Source):
-    """Check out a source tree from an Arch repository named 'archive'
-    available at 'url'. 'version' specifies which version number (development
-    line) will be used for the checkout: this is mostly equivalent to a
-    branch name. This version uses the 'tla' tool to do the checkout, to use
-    'baz' see L{Bazaar} instead.
-    """
+    name = "repo"
 
-    name = "arch"
-    # TODO: slaves >0.6.6 will accept args['build-config'], so use it
-
-    def __init__(self, url=None, version=None, archive=None, **kwargs):
+    def __init__(self, repourl=None,
+                 manifest_branch=None,
+                 manifest=None,
+                 repotarball=None,
+                 **kwargs):
         """
-        @type  url: string
-        @param url: the Arch coordinates of the repository. This is
-                    typically an http:// URL, but could also be the absolute
-                    pathname of a local directory instead.
+        @type  repourl: string
+        @param repourl: the URL which points at the repo manifests repository
 
-        @type  version: string
-        @param version: the category--branch--version to check out. This is
-                        the default branch. If a build specifies a different
-                        branch, it will be used instead of this.
+        @type  manifest_branch: string
+        @param manifest_branch: The manifest branch to check out by default.
 
-        @type  archive: string
-        @param archive: The archive name. If provided, it must match the one
-                        that comes from the repository. If not, the
-                        repository's default will be used.
+        @type  manifest: string
+        @param manifest: The manifest to use for sync.
+
         """
-        warn("Support for Arch will be removed in 0.8.2", DeprecationWarning)
-        self.branch = version
-        self.url = url
         Source.__init__(self, **kwargs)
-        self.addFactoryArguments(url=url,
-                                 version=version,
-                                 archive=archive,
+        self.repourl = repourl
+        self.addFactoryArguments(repourl=repourl,
+                                 manifest_branch=manifest_branch,
+                                 manifest=manifest,
+                                 repotarball=repotarball,
                                  )
-        assert version, "version should be provided"
-        self.args.update({'archive': archive})
-
-    def computeSourceRevision(self, changes):
-        # in Arch, fully-qualified revision numbers look like:
-        #  arch@buildbot.sourceforge.net--2004/buildbot--dev--0--patch-104
-        # For any given builder, all of this is fixed except the patch-104.
-        # The Change might have any part of the fully-qualified string, so we
-        # just look for the last part. We return the "patch-NN" string.
-        if not changes:
-            return None
-        lastChange = None
-        for c in changes:
-            if not c.revision:
-                continue
-            if c.revision.endswith("--base-0"):
-                rev = 0
-            else:
-                i = c.revision.rindex("patch")
-                rev = int(c.revision[i+len("patch-"):])
-            lastChange = max(lastChange, rev)
-        if lastChange is None:
-            return None
-        if lastChange == 0:
-            return "base-0"
-        return "patch-%d" % lastChange
-
-    def checkSlaveVersion(self, cmd, branch):
-        warnings = []
-        slavever = self.slaveVersion(cmd)
-        if not slavever:
-            m = "slave is too old, does not know about %s" % cmd
-            raise BuildSlaveTooOldError(m)
-
-        # slave 1.28 and later understand 'revision'
-        if self.slaveVersionIsOlderThan(cmd, "1.28"):
-            if not self.alwaysUseLatest:
-                # we don't know whether our requested revision is the latest
-                # or not. If the tree does not change very quickly, this will
-                # probably build the right thing, so emit a warning rather
-                # than refuse to build at all
-                m = "WARNING, buildslave is too old to use a revision"
-                log.msg(m)
-                warnings.append(m + "\n")
-
-        if self.slaveVersionIsOlderThan(cmd, "1.39"):
-            # the slave doesn't know to avoid re-using the same sourcedir
-            # when the branch changes. We have no way of knowing which branch
-            # the last build used, so if we're using a non-default branch and
-            # either 'update' or 'copy' modes, it is safer to refuse to
-            # build, and tell the user they need to upgrade the buildslave.
-            if (branch != self.branch
-                and self.args['mode'] in ("update", "copy")):
-                m = ("This buildslave (%s) does not know about multiple "
-                     "branches, and using mode=%s would probably build the "
-                     "wrong tree. "
-                     "Refusing to build. Please upgrade the buildslave to "
-                     "buildbot-0.7.0 or newer." % (self.build.slavename,
-                                                   self.args['mode']))
-                log.msg(m)
-                raise BuildSlaveTooOldError(m)
-
-        return warnings
-
-    def startVC(self, branch, revision, patch):
-        self.args['url'] = self.computeRepositoryURL(self.url),
-        self.args['version'] = branch
-        self.args['revision'] = revision
-        self.args['patch'] = patch
-        warnings = self.checkSlaveVersion("arch", branch)
-
-        revstuff = []
-        if branch is not None and branch != self.branch:
-            revstuff.append("[branch]")
-        if revision is not None:
-            revstuff.append("patch%s" % revision)
-        self.description.extend(revstuff)
-        self.descriptionDone.extend(revstuff)
-
-        cmd = LoggedRemoteCommand("arch", self.args)
-        self.startCommand(cmd, warnings)
-
-
-class Bazaar(Arch):
-    """Bazaar is an alternative client for Arch repositories. baz is mostly
-    compatible with tla, but archive registration is slightly different."""
-
-    # TODO: slaves >0.6.6 will accept args['build-config'], so use it
-
-    def __init__(self, url, version, archive, **kwargs):
-        """
-        @type  url: string
-        @param url: the Arch coordinates of the repository. This is
-                    typically an http:// URL, but could also be the absolute
-                    pathname of a local directory instead.
-
-        @type  version: string
-        @param version: the category--branch--version to check out
-
-        @type  archive: string
-        @param archive: The archive name (required). This must always match
-                        the one that comes from the repository, otherwise the
-                        buildslave will attempt to get sources from the wrong
-                        archive.
-        """
-        self.branch = version
-        self.url = url
-        Source.__init__(self, **kwargs)
-        self.addFactoryArguments(url=url,
-                                 version=version,
-                                 archive=archive,
-                                 )
-        self.args.update({'archive': archive,
+        self.args.update({'manifest_branch': manifest_branch,
+                          'manifest': manifest,
+                          'repotarball': repotarball,
                           })
 
+    def computeSourceRevision(self, changes):
+        if not changes:
+            return None
+        return changes[-1].revision
+
     def startVC(self, branch, revision, patch):
-        self.args['url'] = self.computeRepositoryURL(url),
-        self.args['version'] = branch
+        if branch is not None:
+            self.args['branch'] = branch
+
+        self.args['repourl'] = self.computeRepositoryURL(self.repourl)                  
         self.args['revision'] = revision
         self.args['patch'] = patch
-        warnings = self.checkSlaveVersion("bazaar", branch)
+        slavever = self.slaveVersion("repo")
+        if not slavever:
+            raise BuildSlaveTooOldError("slave is too old, does not know "
+                                        "about repo")
+        cmd = LoggedRemoteCommand("repo", self.args)
+        self.startCommand(cmd)
 
-        revstuff = []
-        if branch is not None and branch != self.branch:
-            revstuff.append("[branch]")
-        if revision is not None:
-            revstuff.append("patch%s" % revision)
-        self.description.extend(revstuff)
-        self.descriptionDone.extend(revstuff)
-
-        cmd = LoggedRemoteCommand("bazaar", self.args)
-        self.startCommand(cmd, warnings)
 
 class Bzr(Source):
     """Check out a source tree from a bzr (Bazaar) repository at 'repourl'.
@@ -1296,43 +1194,4 @@ class P4Sync(Source):
         slavever = self.slaveVersion("p4sync")
         assert slavever, "slave is too old, does not know about p4"
         cmd = LoggedRemoteCommand("p4sync", self.args)
-        self.startCommand(cmd)
-
-class Monotone(Source):
-    """Check out a revision from a monotone server at 'server_addr',
-    branch 'branch'.  'revision' specifies which revision id to check
-    out.
-
-    This step will first create a local database, if necessary, and then pull
-    the contents of the server into the database.  Then it will do the
-    checkout/update from this database."""
-
-    name = "monotone"
-
-    def __init__(self, server_addr=None, branch=None, db_path="monotone.db",
-                 monotone=None,
-                 **kwargs):
-        warn("Support for Monotone will be removed in 0.8.2", DeprecationWarning)
-        Source.__init__(self, **kwargs)
-        self.addFactoryArguments(server_addr=server_addr,
-                                 branch=branch,
-                                 db_path=db_path,
-                                 monotone=monotone,
-                                 )
-        assert branch, "branch must be specified"
-        self.args.update({"branch": branch,
-                          "db_path": db_path})
-        if monotone:
-            self.args["monotone"] = monotone
-
-    def computeSourceRevision(self, changes):
-        if not changes:
-            return None
-        return changes[-1].revision
-
-    def startVC(self):
-        self.args["server_addr"] = self.computeRepositoryURL(server_addr),
-        slavever = self.slaveVersion("monotone")
-        assert slavever, "slave is too old, does not know about monotone"
-        cmd = LoggedRemoteCommand("monotone", self.args)
         self.startCommand(cmd)
