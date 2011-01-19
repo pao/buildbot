@@ -102,7 +102,7 @@ def path_to_root(request):
     return root
 
 def path_to_authfail(request):
-    return path_to_root(request) + "/authfail"
+    return path_to_root(request) + "authfail"
 
 def path_to_builder(request, builderstatus):
     return (path_to_root(request) +
@@ -184,6 +184,13 @@ class ContextMixin(object):
     def getTitle(self, request):
         return self.title
 
+    def getAuthz(self, request):
+        return request.site.buildbot_service.authz
+
+    def getBuildmaster(self, request):
+        return request.site.buildbot_service.master
+
+
 class HtmlResource(resource.Resource, ContextMixin):
     # this is a cheap sort of template thingy
     contentType = "text/html; charset=utf-8"
@@ -239,12 +246,6 @@ class HtmlResource(resource.Resource, ContextMixin):
             request.setHeader("content-length", len(data))
             return ''
         return data
-
-    def getAuthz(self, request):
-        return request.site.buildbot_service.authz
-
-    def getBuildmaster(self, request):
-        return request.site.buildbot_service.master
 
 
 class StaticHTML(HtmlResource):
@@ -350,6 +351,7 @@ class BuildLineMixin:
             rev = "??"
         rev = str(rev)
         css_class = css_classes.get(results, "")
+        repo = build.getSourceStamp().repository
 
         if type(text) == list:
             text = " ".join(text)            
@@ -362,6 +364,7 @@ class BuildLineMixin:
                   'buildurl': path_to_build(req, build),
                   'builderurl': path_to_builder(req, build.getBuilder()),
                   'rev': rev,
+                  'rev_repo' : repo,
                   'time': time.strftime(self.LINE_TIME_FORMAT,
                                         time.localtime(build.getTimes()[0])),
                   'text': text,

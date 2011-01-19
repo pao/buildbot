@@ -12,6 +12,7 @@ from buildbot.util.eventual import eventually
 import weakref
 import os, shutil, re, urllib, itertools
 import gc
+import time
 from cPickle import load, dump
 from cStringIO import StringIO
 from bz2 import BZ2File
@@ -23,6 +24,13 @@ from buildbot import interfaces, util, sourcestamp
 SUCCESS, WARNINGS, FAILURE, SKIPPED, EXCEPTION, RETRY = range(6)
 Results = ["success", "warnings", "failure", "skipped", "exception", "retry"]
 
+def worst_status(a, b):
+    # SUCCESS > SKIPPED > WARNINGS > FAILURE > EXCEPTION > RETRY
+    # Retry needs to be considered the worst so that conusmers don't have to
+    # worry about other failures undermining the RETRY.
+    for s in (RETRY, EXCEPTION, FAILURE, WARNINGS, SKIPPED, SUCCESS):
+        if s in (a, b):
+            return s
 
 # build processes call the following methods:
 #
@@ -827,6 +835,8 @@ class BuildStepStatus(styles.Versioned):
         self.finishedWatchers = []
         self.statistics = {}
 
+        self.waitingForLocks = False
+
     def getName(self):
         """Returns a short string with the name of this step. This string
         may have spaces in it."""
@@ -1045,6 +1055,12 @@ class BuildStepStatus(styles.Versioned):
     def checkLogfiles(self):
         # filter out logs that have been deleted
         self.logs = [ l for l in self.logs if l.hasContents() ]
+
+    def isWaitingForLocks(self):
+        return self.waitingForLocks
+
+    def setWaitingForLocks(self, waiting):
+        self.waitingForLocks = waiting
 
     # persistence
 
@@ -1714,11 +1730,14 @@ class BuilderStatus(styles.Versioned):
         except EOFError:
             raise IndexError("corrupted build pickle %d" % number)
 
-    def prune(self):
-        gc.collect()
-
+    def prune(self, events_only=False):
         # begin by pruning our own events
         self.events = self.events[-self.eventHorizon:]
+
+        if events_only:
+            return
+
+        gc.collect()
 
         # get the horizons straight
         if self.buildHorizon:
@@ -1917,6 +1936,7 @@ class BuilderStatus(styles.Versioned):
         e.started = util.now()
         e.text = text
         self.events.append(e)
+        self.prune(events_only=True)
         return e # they are free to mangle it further
 
     def addPointEvent(self, text=[]):
@@ -1927,6 +1947,7 @@ class BuilderStatus(styles.Versioned):
         e.finished = 0
         e.text = text
         self.events.append(e)
+        self.prune(events_only=True)
         return e # for consistency, but they really shouldn't touch it
 
     def setBigState(self, state):
@@ -2128,6 +2149,7 @@ class SlaveStatus:
         self._lastMessageReceived = 0
         self.runningBuilds = []
         self.graceful_callbacks = []
+        self.connect_times = []
 
     def getName(self):
         return self.name
@@ -2145,6 +2167,9 @@ class SlaveStatus:
         return self._lastMessageReceived
     def getRunningBuilds(self):
         return self.runningBuilds
+    def getConnectCount(self):
+        then = time.time() - 3600
+        return len([ t for t in self.connect_times if t > then ])
 
     def setAdmin(self, admin):
         self.admin = admin
@@ -2158,6 +2183,11 @@ class SlaveStatus:
         self.connected = isConnected
     def setLastMessageReceived(self, when):
         self._lastMessageReceived = when
+
+    def recordConnectTime(self):
+        # record this connnect, and keep data for the last hour
+        now = time.time()
+        self.connect_times = [ t for t in self.connect_times if t > now - 3600 ] + [ now ]
 
     def buildStarted(self, build):
         self.runningBuilds.append(build)
@@ -2196,7 +2226,6 @@ class SlaveStatus:
         result['connected'] = self.isConnected()
         result['runningBuilds'] = [b.asDict() for b in self.getRunningBuilds()]
         return result
-
 
 class Status:
     """
@@ -2585,8 +2614,7 @@ class Status:
                             eventually(observer.requestSubmitted, brs)
                     else:
                         if hasattr(observer, 'requestCancelled'):
-                            eventually(observer.requestCancelled, brs)
-
-
+                            builder = self.getBuilder(buildername)
+                            eventually(observer.requestCancelled, builder, brs)
 
 # vim: set ts=4 sts=4 sw=4 et:

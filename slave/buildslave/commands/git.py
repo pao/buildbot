@@ -17,13 +17,13 @@ class Git(SourceBaseCommand):
     ['submodules'] (optional): whether to initialize and update
                                submodules. Default: False.
     ['ignore_ignores']:        ignore ignores when purging changes.
+    ['reference'] (optional):  use this reference repository to fetch objects
     """
 
     header = "git operation"
 
     def setup(self, args):
         SourceBaseCommand.setup(self, args)
-        self.vcexe = utils.getCommand("git")
         self.repourl = args['repourl']
         self.branch = args.get('branch')
         if not self.branch:
@@ -31,6 +31,7 @@ class Git(SourceBaseCommand):
         self.sourcedata = "%s %s\n" % (self.repourl, self.branch)
         self.submodules = args.get('submodules')
         self.ignore_ignores = args.get('ignore_ignores', True)
+        self.reference = args.get('reference', None)
 
     def _fullSrcdir(self):
         return os.path.join(self.builder.basedir, self.srcdir)
@@ -44,7 +45,8 @@ class Git(SourceBaseCommand):
         return os.path.isdir(os.path.join(self._fullSrcdir(), ".git"))
 
     def _dovccmd(self, command, cb=None, **kwargs):
-        c = runprocess.RunProcess(self.builder, [self.vcexe] + command, self._fullSrcdir(),
+        git = self.getCommand("git")
+        c = runprocess.RunProcess(self.builder, [git] + command, self._fullSrcdir(),
                          sendRC=False, timeout=self.timeout,
                          maxTime=self.maxTime, usePTY=False, **kwargs)
         self.command = c
@@ -121,6 +123,12 @@ class Git(SourceBaseCommand):
         # The plus will make sure the repo is moved to the branch's
         # head even if it is not a simple "fast-forward"
         command = ['fetch', '-t', self.repourl, '+%s' % self.branch]
+        # If the 'progress' option is set, tell git fetch to output
+        # progress information to the log. This can solve issues with
+        # long fetches killed due to lack of output, but only works
+        # with Git 1.7.2 or later.
+        if self.args.get('progress'):
+            command.append('--progress')
         self.sendStatus({"header": "fetching branch %s from %s\n"
                                         % (self.branch, self.repourl)})
         return self._dovccmd(command, self._didFetch)
@@ -140,14 +148,26 @@ class Git(SourceBaseCommand):
             return self._doFetch(None)
 
     def _didInit(self, res):
+        # If we have a reference repository specified, we need to also set that
+        # up after the 'git init'.
+        if self.reference:
+            git_alts_path = os.path.join(self._fullSrcdir(), '.git', 'objects', 'info', 'alternates')
+            git_alts_file = open(git_alts_path, 'w')
+            git_alts_file.write(self.reference)
+            git_alts_file.close()
         return self.doVCUpdate()
 
     def doVCFull(self):
+        git = self.getCommand("git")
+
         # If they didn't ask for a specific revision, we can get away with a
         # shallow clone.
         if not self.args.get('revision') and self.args.get('shallow'):
-            cmd = [self.vcexe, 'clone', '--depth', '1', self.repourl,
-                   self._fullSrcdir()]
+            cmd = [git, 'clone', '--depth', '1']
+            # If we have a reference repository, pass it to the clone command
+            if self.reference:
+                cmd.extend(['--reference', self.reference])
+            cmd.extend([self.repourl, self._fullSrcdir()])
             c = runprocess.RunProcess(self.builder, cmd, self.builder.basedir,
                              sendRC=False, timeout=self.timeout,
                              maxTime=self.maxTime, usePTY=False)
