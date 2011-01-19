@@ -115,7 +115,7 @@ class BuilderChangelog(HtmlResource):
         commitlogs = None
         for i in range(build_from+1, build_to+1):
             commitlogs = self.parse_synclog([s.getLogs()[0] for s in b.getBuild(i).getSteps() 
-                if s.getName() == "repo sync"][0], commitlogs)
+                if "repo sync" in s.getName()][0], commitlogs)
         delta_links = self.delta_synclog(commitlogs)
         return '<br />'.join(['<a href="%s">%s</a>' % (l,l) for l in delta_links]), build_from, build_to
 
